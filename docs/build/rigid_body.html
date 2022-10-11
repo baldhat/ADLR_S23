@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0"/><title>Rigid Body · Flyonic</title><script data-outdated-warner src="assets/warner.js"></script><link href="https://cdnjs.cloudflare.com/ajax/libs/lato-font/3.0.0/css/lato-font.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/juliamono/0.045/juliamono.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.4/css/fontawesome.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.4/css/solid.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.4/css/brands.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.13.24/katex.min.css" rel="stylesheet" type="text/css"/><script>documenterBaseURL="."</script><script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.6/require.min.js" data-main="assets/documenter.js"></script><script src="siteinfo.js"></script><script src="../versions.js"></script><link class="docs-theme-link" rel="stylesheet" type="text/css" href="assets/themes/documenter-dark.css" data-theme-name="documenter-dark" data-theme-primary-dark/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="assets/themes/documenter-light.css" data-theme-name="documenter-light" data-theme-primary/><script src="assets/themeswap.js"></script></head><body><div id="documenter"><nav class="docs-sidebar"><a class="docs-logo" href="index.html"><img class="docs-light-only" src="assets/logo.png" alt="Flyonic logo"/><img class="docs-dark-only" src="assets/logo-dark.png" alt="Flyonic logo"/></a><div class="docs-package-name"><span class="docs-autofit"><a href="index.html">Flyonic</a></span></div><form class="docs-search" action="search.html"><input class="docs-search-query" id="documenter-search-query" name="q" type="text" placeholder="Search docs"/></form><ul class="docs-menu"><li><a class="tocitem" href="index.html">Flyonic</a></li><li><a class="tocitem" href="quick_start.html">Quickstart guide</a></li><li><a class="tocitem" href="examples.html">Examples</a></li><li><span class="tocitem">Julia Modules</span><ul><li><a class="tocitem" href="vtol_model.html">VTOL Model</a></li><li><a class="tocitem" href="global_controller.html">ETH Controller</a></li><li class="is-active"><a class="tocitem" href="rigid_body.html">Rigid Body</a><ul class="internal"><li><a class="tocitem" href="#Examples"><span>Examples</span></a></li><li><a class="tocitem" href="#Functions"><span>Functions</span></a></li></ul></li><li><a class="tocitem" href="visualization.html">Visualization</a></li><li><a class="tocitem" href="px4_utils.html">Px4 Utils</a></li><li><a class="tocitem" href="vtol_parameter_optimisation.html">VTOL Model Parameter Optimisation</a></li></ul></li><li><a class="tocitem" href="unittest.html">Unittest</a></li><li><span class="tocitem">Hardware</span><ul><li><a class="tocitem" href="hardware/hardware.html">overview</a></li><li><a class="tocitem" href="hardware/iron_bird.html">IRON bird quickstart</a></li><li><a class="tocitem" href="hardware/installation.html">Ubuntu configurations</a></li><li><a class="tocitem" href="hardware/px4_ext_control.html">PX4 customization</a></li><li><a class="tocitem" href="hardware/vtol3_brett.html">VTOL3 Brett</a></li><li><a class="tocitem" href="hardware/microcomputer.html">Microcomputer</a></li></ul></li><li><span class="tocitem">Flight experiments</span><ul><li><a class="tocitem" href="experiments/airfields.html">Airfields</a></li><li><a class="tocitem" href="experiments/flight_laws.html">Flight laws DE</a></li></ul></li><li><a class="tocitem" href="related_work.html">Related Work</a></li><li><span class="tocitem">Workflow &amp; Commands</span><ul><li><a class="tocitem" href="workflow/executing_remotely.html">Remote execution</a></li></ul></li></ul><div class="docs-version-selector field has-addons"><div class="control"><span class="docs-label button is-static is-size-7">Version</span></div><div class="docs-selector control is-expanded"><div class="select is-fullwidth is-size-7"><select id="documenter-version-selector"></select></div></div></div></nav><div class="docs-main"><header class="docs-navbar"><nav class="breadcrumb"><ul class="is-hidden-mobile"><li><a class="is-disabled">Julia Modules</a></li><li class="is-active"><a href="rigid_body.html">Rigid Body</a></li></ul><ul class="is-hidden-tablet"><li class="is-active"><a href="rigid_body.html">Rigid Body</a></li></ul></nav><div class="docs-right"><a class="docs-edit-link" href="https://github.com/Finn-Sueberkrueb/flyonic/blob/main/docs/src/rigid_body.md" title="Edit on GitHub"><span class="docs-icon fab"></span><span class="docs-label is-hidden-touch">Edit on GitHub</span></a><a class="docs-settings-button fas fa-cog" id="documenter-settings-button" href="#" title="Settings"></a><a class="docs-sidebar-button fa fa-bars is-hidden-desktop" id="documenter-sidebar-button" href="#"></a></div></header><article class="content" id="documenter-page"><h1 id="Rigid-Body-Integration"><a class="docs-heading-anchor" href="#Rigid-Body-Integration">Rigid Body Integration</a><a id="Rigid-Body-Integration-1"></a><a class="docs-heading-anchor-permalink" href="#Rigid-Body-Integration" title="Permalink"></a></h1><p><a href="https://juliarobotics.org/RigidBodyDynamics.jl/stable/">RigidBodyDynamics Docu</a></p><p>There are two options for rigid body simulation <a href="@ref Main.RigidBodies.rigid_body_sim_simple"><code>rigid_body_sim_simple</code></a> and <a href="@ref Main.RigidBodies.rigid_body_simulation_step"><code>rigid_body_simulation_step</code></a>. As well as a simple function <a href="@ref Main.RigidBodies.vtol_add_wind"><code>vtol_add_wind</code></a> to add the wind speed to the relative drone speed.</p><div class="admonition is-warning"><header class="admonition-header">Do not use RigidBodyDynamics</header><div class="admonition-body"><p>RigidBodyDynamics.jl is not automatically differentiated and will eventually be deleted from the repository.</p></div></div><h2 id="Examples"><a class="docs-heading-anchor" href="#Examples">Examples</a><a id="Examples-1"></a><a class="docs-heading-anchor-permalink" href="#Examples" title="Permalink"></a></h2><h3 id="[rigid_body_simple](@ref-Main.RigidBodies.rigid_body_simple)"><a class="docs-heading-anchor" href="#[rigid_body_simple](@ref-Main.RigidBodies.rigid_body_simple)"><a href="@ref Main.RigidBodies.rigid_body_simple"><code>rigid_body_simple</code></a></a><a id="[rigid_body_simple](@ref-Main.RigidBodies.rigid_body_simple)-1"></a><a class="docs-heading-anchor-permalink" href="#[rigid_body_simple](@ref-Main.RigidBodies.rigid_body_simple)" title="Permalink"></a></h3><pre><code class="language-julia hljs">include(&quot;../Flyonic.jl&quot;);
+using .Flyonic;
+using LinearAlgebra
+using Rotations;
+using LoopThrottle;
+
+# Inizialise Visual Representation
+create_visualization();
+create_VTOL(&quot;vtol&quot;);
+
+# initialise drone position
+x_W = [0.0; 0.0; 0.0];
+v_B = [0.0; 0.0; 0.0];
+R_W = [0.0  0.0  1.0;
+       0.0 -1.0  0.0;
+       1.0  0.0  0.0];
+ω_B = [0.0; 0.0; 0.0];
+
+# Set the global wind
+wind_speed = 0.0;
+wind_direction_W = [0.0;0.0;0.0];
+
+# start, stop and step time
+t = 0.0             
+final_time = 2.0
+Δt = 1e-3;
+
+# @throttle is used to run the simulation in wall time when the dynamics simulation is faster.
+@throttle t while t &lt; final_time
+    
+    # Get the next actions from somewhere. Here it is a fixes action
+    action = [10.0, 10.0, -0.035, -0.035]
+
+    # caluclate wind impact
+    v_in_wind_B = vtol_add_wind(v_B, R_W, wind_speed, wind_direction_W)
+    
+    # caluclate aerodynamic forces
+    torque_B, force_B = vtol_model(v_in_wind_B, action, vtol_parameters);
+        
+    # set the next forces for the rigid body simulation
+    x_W, v_B, R_W, ω_B, t = rigid_body_simple(torque_B, force_B, x_W, v_B, R_W, ω_B, t, Δt, vtol_body_inertia_B, vtol_body_mass)
+    
+    # set Visualisation
+    set_transform(&quot;vtol&quot;, x_W,QuatRotation(R_W));
+end</code></pre><h3 id="[rigid_body_simulation_step](@ref-Main.RigidBodies.rigid_body_simulation_step)"><a class="docs-heading-anchor" href="#[rigid_body_simulation_step](@ref-Main.RigidBodies.rigid_body_simulation_step)"><a href="@ref Main.RigidBodies.rigid_body_simulation_step"><code>rigid_body_simulation_step</code></a></a><a id="[rigid_body_simulation_step](@ref-Main.RigidBodies.rigid_body_simulation_step)-1"></a><a class="docs-heading-anchor-permalink" href="#[rigid_body_simulation_step](@ref-Main.RigidBodies.rigid_body_simulation_step)" title="Permalink"></a></h3><p>This example is reduced. And describes only the extra pieces that are needed for the RigidBodyDynamics.jl package.</p><pre><code class="language-julia hljs"># Setting the rigid body simulation
+mechanism_state, vtol_joint = init_RigidBody(x_W, v_B, R_W, ω_B, vtol_body_inertia_B, vtol_body_mass);
+integrator, storage = init_integrator(mechanism_state);
+
+# Visualize initial state
+x_W, v_B, R_W, ω_B = get_current_state(mechanism_state, vtol_joint);
+set_transform(&quot;vtol&quot;, x_W,QuatRotation(R_W)); # Visualisation must be initialised beforehand.
+
+# Can always be called to reset state
+reset_mechanism_state!(mechanism_state, vtol_joint, x_W, v_B, R_W, ω_B);
+
+while t &lt; final_time
+        
+
+    # caluclate aerodynamic forces
+    vtol_torque_B, vtol_force_B = vtol_model(v_B, action, vtol_parameters);
+
+    # set the next forces for the rigid body simulation
+    set_next_torque_force!(vtol_torque_B, vtol_force_B)
+        
+    # integrate rigid body dynamics for Δt
+    x_W, v_B, R_W, ω_B, time = rigid_body_simulation_step(integrator, t, Δt, storage)
+        
+    # Visualize the new state
+    set_transform(&quot;vtol&quot;, x_W,QuatRotation(R_W));
+
+    t += Δt
+end</code></pre><h2 id="Functions"><a class="docs-heading-anchor" href="#Functions">Functions</a><a id="Functions-1"></a><a class="docs-heading-anchor-permalink" href="#Functions" title="Permalink"></a></h2><pre><code class="language- hljs">Modules = [RigidBodies]
+Order   = [:function, :type]</code></pre></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="global_controller.html">« ETH Controller</a><a class="docs-footer-nextpage" href="visualization.html">Visualization »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 0.27.23 on <span class="colophon-date" title="Wednesday 5 October 2022 14:28">Wednesday 5 October 2022</span>. Using Julia version 1.8.0.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>
