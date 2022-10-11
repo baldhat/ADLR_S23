@@ -1,6 +1,8 @@
 # Flyonic
 
-[The documentation can be found under docu.flyonic.de](http://docu.flyonic.de)
+[The documentation can be found under docu.flyonic.de](http://docu.flyonic.de) 
+Username: BZM7RRWW0V02
+Password: )!6,F(1G1_dF7df
 
 An environment for VTOL drone experiments. The environment contains VTOL models, controllers, visualizations and intelligent algorithms that adapt the cognitive abilities from birds to future drones. The focus is on developing modern controls that operate the aerodynamic limits of the aircraft and push their performance beyond the current limits.
 
