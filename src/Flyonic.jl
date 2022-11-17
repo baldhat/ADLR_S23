@@ -5,7 +5,7 @@ module Flyonic
 # RigidBodies.jl
 include("RigidBodies.jl");
 using .RigidBodies;
-export vtol_add_wind, init_RigidBody, set_next_torque_force!, rigid_body_simulation_step, init_integrator, get_current_state, reset_mechanism_state!, rigid_body_simple, rigid_body_quaternion, discrepancy_integration, parameter_free_integration
+export vtol_add_wind, rigid_body_simple
 
 # Visualization.jl
 include("Visualization.jl");
@@ -16,11 +16,10 @@ export create_remote_visualization, create_visualization, create_VTOL, create_sp
 # VtolModel.jl
 include("VtolModel.jl");
 using .VtolModel;
-export vtol_model, init_eth_vtol_model, MC_model, init_MC_vtol_model
+export vtol_model
 
 # VtolsConfig.jl
 include("VtolsConfig.jl");
-export eth_vtol_param, brett_vtol3_param, brett_simple_MC #, vtol_body_inertia_B, vtol_body_mass, brett_vtol3_parameters
-
+export eth_vtol_param
 
 end # end of module

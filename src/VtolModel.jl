@@ -3,73 +3,8 @@ module VtolModel
 include("RigidBodies.jl");
 using .RigidBodies;
 
-export vtol_model, init_eth_vtol_model, MC_model, init_MC_vtol_model
+export vtol_model
 
-function init_eth_vtol_model(vtol_params)
-
-    function eth_vtol_model(x_W, v_B, Q_W, ω_B, airspeed_x_B, t, Δt, action)
-
-        torque_B, force_B = vtol_model(v_B, action, vtol_params)
-
-        # set the next forces for the rigid body simulation
-        x_W, v_B, Q_W, ω_B, t = rigid_body_quaternion(torque_B, force_B, x_W, v_B, Q_W, ω_B, t, Δt, vtol_params)
-
-
-        return x_W, v_B, Q_W, ω_B, t
-    end
-
-    return eth_vtol_model
-end;
-
-
-
-function init_MC_vtol_model(vtol_params)
-
-    function MC_vtol_model(x_W, v_B, Q_W, ω_B, airspeed_x_B, t, Δt, action)
-
-        torque_B, force_B = MC_model(v_B, action, vtol_params)
-
-        # set the next forces for the rigid body simulation
-        x_W, v_B, Q_W, ω_B, t = rigid_body_quaternion(torque_B, force_B, x_W, v_B, Q_W, ω_B, t, Δt, vtol_params)
-
-        
-        return x_W, v_B, Q_W, ω_B, t
-    end
-
-    return MC_vtol_model
-end;
-
-
-
-
-function MC_model(v_B::Vector{Float64}, actions_PWM::Vector{Float64}, param)
-
-    actions = [(actions_PWM[1] -param["f_shift"])*param["f_scale"];
-               (actions_PWM[2] -param["f_shift"])*param["f_scale"]; 
-               (actions_PWM[3] -param["δ_r_shift"])*param["δ_scale"];
-               (actions_PWM[4] -param["δ_l_shift"])*(-1.0)*param["δ_scale"]]
-
-    # Reference airspeed over the flaps along the x_B axis
-    airspeed_x_l = actions[2];
-    airspeed_x_r = actions[1];
-
-    torque_pitch = param["c_pitch"] * ( actions[4] * airspeed_x_l + actions[3] * airspeed_x_r);
-    torque_roll = param["c_roll"] *  (actions[3] * airspeed_x_r - actions[4] * airspeed_x_l);
-
-    angle_of_attack = atan(v_B[3] , v_B[1]); # angle of attack
-    airspeed = sqrt(v_B[3]^2 +  v_B[1]^2); # velocity of the aircraft relative to the surrounding air
-
-    m_pitch = param["kp1"] * sin(angle_of_attack) * airspeed^2;
-
-
-
-    torque_yaw = (param["prop_distance"] - param["prop_shift"]) * actions[2] - (param["prop_distance"] + param["prop_shift"]) * actions[1];
-    torque_B = [torque_roll ; torque_pitch + m_pitch ; torque_yaw]           
-    force_B = [ actions[2] + actions[1]; 0.0; 0.0]
-
-
-    return torque_B, force_B
-end
 
 
 
