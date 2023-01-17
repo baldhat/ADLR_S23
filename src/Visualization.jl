@@ -1,6 +1,6 @@
 module Visualization
 
-export create_remote_visualization, create_visualization, create_VTOL, create_sphere, set_transform, close_visualization, create_sphere, set_arrow, transform_arrow, set_actuators
+export create_remote_visualization, create_visualization, create_VTOL, create_sphere, set_transform, close_visualization, create_sphere, set_arrow, transform_arrow, set_actuators, set_Crazyflie_actuators, set_color, create_Crazyflie
 
 
 using MeshCat
@@ -91,6 +91,30 @@ function set_actuators(name::AbstractString, actuators::AbstractVector{T}) where
 end
 
 """
+    set_Crazyflie_actuators(name::AbstractString, actuators::AbstractVector{T})
+    
+Actuator visualisation 4x thrust
+"""
+function set_Crazyflie_actuators(name::AbstractString, actuators::AbstractVector{T}) where T
+
+    f_1 = actuators[1]
+    f_2 = actuators[2]
+    f_3 = actuators[3]
+    f_4 = actuators[4]
+    
+
+    base = [0.05; -0.05; 0.02];
+    transform_arrow(name*"/thrust_1", base, [0.0; 0.0; f_1])
+    base = [-0.05; -0.05; 0.02];
+    transform_arrow(name*"/thrust_2", base, [0.0; 0.0; f_2])
+    base = [-0.05; 0.05; 0.02];
+    transform_arrow(name*"/thrust_3", base, [0.0; 0.0; f_3])
+    base = [0.05; 0.05; 0.02];
+    transform_arrow(name*"/thrust_4", base, [0.0; 0.0; f_4])
+end
+
+
+"""
     create_VTOL(name::AbstractString; actuators::Bool=false, color::RGBA{Float32}=RGBA{Float32}(0.8, 0.8, 0.8, 1.0))
     
 Creates a Vtol object with the specified name. Model and color are optional. In addition, visualisations for the actuator values ( flaps, motors) can be activated.
@@ -113,12 +137,28 @@ function create_VTOL(name::AbstractString; actuators::Bool=false, color_vec::Abs
     end
 end
 
-
 """
-    set_arrow(name::AbstractString; color::RGBA{Float32}=RGBA{Float32}(0.8, 0.0, 0.0, 0.2))
+    create_Crazyflie(name::AbstractString; actuators::Bool=false, color_vec::AbstractVector=[0.8; 0.8; 0.8; 1.0])
     
-Initialises arrow with name and RGBA colour
+Creates a Crazyflie object with the specified name. Model and color are optional. In addition, visualisations for the actuator values ( 4x motors) can be activated.
 """
+function create_Crazyflie(name::AbstractString; actuators::Bool=false, color_vec::AbstractVector=[0.8; 0.8; 0.8; 1.0])
+    # https://threejs.org/docs/index.html?q=mesh#api/en/materials/MeshPhongMaterial
+    color::RGBA{Float32}=RGBA{Float32}(color_vec[1], color_vec[2], color_vec[3], color_vec[4])
+    vtol_material = MeshPhongMaterial(color=color);
+
+    path = joinpath(@__DIR__, "..", "visualization", "models", "crazyflie.dae");
+    setobject!(vis[name]["fuselage"], MeshFileGeometry(path), vtol_material);
+
+    if actuators
+        set_arrow(name*"/thrust_1"; radius=0.3)
+        set_arrow(name*"/thrust_2"; radius=0.3)
+        set_arrow(name*"/thrust_3"; radius=0.3)
+        set_arrow(name*"/thrust_4"; radius=0.3)
+    end
+end
+
+
 function set_arrow(name::AbstractString; color::RGBA{Float32}=RGBA{Float32}(0.8, 0.0, 0.0, 0.2))
     arrow_material = MeshPhongMaterial(color=color);
 
@@ -128,6 +168,25 @@ function set_arrow(name::AbstractString; color::RGBA{Float32}=RGBA{Float32}(0.8,
     head = Cone(Point(0.0, 0.0, 0.0), Point(0.0, 0.0, 1.), 1.0)
     setobject!(vis[name]["head"], head, arrow_material) 
 end
+
+"""
+    set_arrow(name::AbstractString; color_vec::AbstractVector=[0.8; 0.0; 0.8; 0.2], radius=1.0)
+    
+Initialises arrow with name and RGBA colour
+"""
+function set_arrow(name::AbstractString; color_vec::AbstractVector=[0.8; 0.0; 0.8; 0.2], radius=1.0)
+
+    color::RGBA{Float32}=RGBA{Float32}(color_vec[1], color_vec[2], color_vec[3], color_vec[4])
+
+    arrow_material = MeshPhongMaterial(color=color);
+
+    shaft = Cylinder(zero(Point{3, Float64}), Point(0.0, 0.0, 1.0), radius)
+    setobject!(vis[name]["shaft"], shaft, arrow_material)
+
+    head = Cone(Point(0.0, 0.0, 0.0), Point(0.0, 0.0, 1.), radius)
+    setobject!(vis[name]["head"], head, arrow_material) 
+end
+
 
 
 """
@@ -182,12 +241,38 @@ function create_sphere(name::AbstractString, radius::Real; color::RGBA{Float32}=
 end
 
 """
+    create_sphere(name::AbstractString; color_vec::AbstractVector=[0.0; 1.0; 0.0; 0.5], radius::Real=0.1)
+    
+Creates a sphere object with the specified name and radius. Color is optional.
+"""
+function create_sphere(name::AbstractString; color_vec::AbstractVector=[0.0; 1.0; 0.0; 0.5], radius::Real=0.1)
+
+        color::RGBA{Float32}=RGBA{Float32}(color_vec[1], color_vec[2], color_vec[3], color_vec[4])
+
+        vtol_material = MeshPhongMaterial(color=color);
+        geom = HyperSphere(Point(0.0, 0.0, 0.0),radius);
+        setobject!(vis[name], geom, vtol_material);
+end
+
+"""
     close_visualization()
     
 Deletes the visualization.
 """
 function close_visualization()
     delete!(vis); 
+end
+
+"""
+    set_color(name::AbstractString, color_vec::AbstractVector=[0.8; 0.8; 0.8; 1.0])
+    
+Set VTOL color
+"""
+function set_color(name::AbstractString, color_vec::AbstractVector=[0.8; 0.8; 0.8; 1.0])
+
+
+    color::RGBA{Float32}=RGBA{Float32}(color_vec[1], color_vec[2], color_vec[3], color_vec[4])
+    setprop!(vis[name], "color", color)
 end
 
 
