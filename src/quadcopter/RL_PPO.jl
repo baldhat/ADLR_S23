@@ -1,3 +1,8 @@
+using Pkg
+if isfile("Project.toml") && isfile("Manifest.toml")
+    Pkg.activate(".")
+end
+
 include("../Flyonic.jl");
 using .Flyonic;
 
