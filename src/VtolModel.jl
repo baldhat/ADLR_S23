@@ -261,8 +261,8 @@ function crazyflie_model(pwm)
             max(0.0, min(pwm[4], 65535.0))]
 
     # Förster, Julian. System identification of the crazyflie 2.0 nano quadrocopter. BS thesis. ETH Zurich, 2015.
-    thrust = (2.130295*10e-11) .* pwm.^2 .+ (1.032633 * 10e-6) .* pwm .+ (5.484560 * 10e-4)
-    torque = 0.005964552 .* thrust .+ (1.563383 * 10e-5)
+    thrust = (2.130295*1e-11) .* pwm.^2 .+ (1.032633 * 1e-6) .* pwm .+ (5.484560 * 1e-4)
+    torque = 0.005964552 .* thrust .+ (1.563383 * 1e-5)
 
 
     roll = (thrust[3] + thrust[4] - thrust[1] - thrust[2] ) * 0.05
