@@ -15,7 +15,7 @@ export vtol_add_wind, rigid_body_simple
 # Visualization.jl
 include("Visualization.jl");
 using .Visualization;
-export create_remote_visualization, create_visualization, create_VTOL, create_sphere, set_transform, close_visualization, create_sphere, set_arrow, transform_arrow, set_actuators, set_Crazyflie_actuators, set_color, create_Crazyflie
+export create_remote_visualization, create_visualization, create_VTOL, create_sphere, set_transform, close_visualization, create_sphere, set_arrow, transform_arrow, set_actuators, set_Crazyflie_actuators, set_color, create_Crazyflie, create_Office
 
 # VtolModel.jl
 include("VtolModel.jl");

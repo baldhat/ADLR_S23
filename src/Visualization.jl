@@ -1,6 +1,6 @@
 module Visualization
 
-export create_remote_visualization, create_visualization, create_VTOL, create_sphere, set_transform, close_visualization, create_sphere, set_arrow, transform_arrow, set_actuators, set_Crazyflie_actuators, set_color, create_Crazyflie
+export create_remote_visualization, create_visualization, create_VTOL, create_sphere, set_transform, close_visualization, create_sphere, set_arrow, transform_arrow, set_actuators, set_Crazyflie_actuators, set_color, create_Crazyflie, create_Office
 
 
 using MeshCat
@@ -25,6 +25,7 @@ Create and open a new visualizer.
 function create_visualization()
     global vis = Visualizer();
     render(vis); # render MeshCat in Browser. Also possible inline.
+    setprop!(vis["/Background"], "visible", false)
     return vis
 end
 
@@ -157,6 +158,22 @@ function create_Crazyflie(name::AbstractString; actuators::Bool=false, color_vec
         set_arrow(name*"/thrust_4"; radius=0.3)
     end
 end
+
+
+"""
+    create_Crazyflie(name::AbstractString; actuators::Bool=false, color_vec::AbstractVector=[0.8; 0.8; 0.8; 1.0])
+    
+Creates a Crazyflie object with the specified name. Model and color are optional. In addition, visualisations for the actuator values ( 4x motors) can be activated.
+"""
+function create_Office(name::AbstractString; color_vec::AbstractVector=[0.8; 0.8; 0.8; 1.0])
+    # https://threejs.org/docs/index.html?q=mesh#api/en/materials/MeshPhongMaterial
+    color::RGBA{Float32}=RGBA{Float32}(color_vec[1], color_vec[2], color_vec[3], color_vec[4])
+    vtol_material = MeshPhongMaterial(color=color);
+
+    path = joinpath(@__DIR__, "..", "visualization", "models", "office.dae");
+    setobject!(vis[name], MeshFileGeometry(path), vtol_material);
+end
+
 
 
 function set_arrow(name::AbstractString; color::RGBA{Float32}=RGBA{Float32}(0.8, 0.0, 0.0, 0.2))
