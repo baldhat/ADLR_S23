@@ -251,7 +251,7 @@ agent = Agent( # A wrapper of an AbstractPolicy
 
 function saveModel(t, agent, env)
     model = cpu(agent.policy.approximator)   
-    f = joinpath("./RL_models/", "vtol_ppo_2_$t.bson")
+    f = joinpath("./src/examples/RL_models/", "vtol_ppo_2_$t.bson")
     @save f model
     println("parameters at step $t saved to $f")
 end
