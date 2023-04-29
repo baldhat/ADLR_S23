@@ -57,18 +57,25 @@ function VtolEnv(;
     
     action_space = Space(
         ClosedInterval{T}[
-            0.0..2.0, # thrust
-            -1.0..1.0, # flaps
+            0.0..2.0, # thrust left
+            0.0..2.0, # thrust right
+            -1.0..1.0, # flaps left
+            -1.0..1.0, # flaps right
             ], 
     )
 
     
     state_space = Space( # Three continuous values in state space.
         ClosedInterval{T}[
-            typemin(T)..typemax(T), # rotation arround y
-            typemin(T)..typemax(T), # rotation velocity arround y
-            typemin(T)..typemax(T), # world position along x
-            typemin(T)..typemax(T), # world position along z
+            typemin(T)..typemax(T),  # rotation arround x
+            typemin(T)..typemax(T),  # rotation arround y
+            typemin(T)..typemax(T),  # rotation arround z
+            typemin(T)..typemax(T),  # rotation velocity arround x
+            typemin(T)..typemax(T),  # rotation velocity arround y
+            typemin(T)..typemax(T),  # rotation velocity arround z
+            typemin(T)..typemax(T),  # world position along x
+            typemin(T)..typemax(T),  # world position along y
+            typemin(T)..typemax(T),  # world position along z
             ], 
     )
     
@@ -80,7 +87,7 @@ function VtolEnv(;
     environment = VtolEnv(
         action_space,
         state_space,
-        zeros(T, 3), # current state, needs to be extended.
+        zeros(T, 9), # current state, needs to be extended.
         rand(action_space),
         false, # episode done ?
         0.0, # time
@@ -111,11 +118,11 @@ RLBase.state(env::VtolEnv) = env.state
 function computeReward(env::VtolEnv{A,T}) where {A,T}
     
     stay_alive = 3.0
-    not_upright_orientation = abs(env.state[1]-pi*0.5)*10.0
-    not_centered_position = abs(env.state[3])*10.0
-    hight = env.state[4]*100.0
+    not_upright_orientation = abs(env.state[2]-pi*0.5)
+    position_offset = (abs(env.state[7])+abs(env.state[8])+abs(env.state[9]-2)) # Hold at 0,0,2
+    angular_velocity = (abs(env.state[4])+abs(env.state[5])+abs(env.state[6]))
     
-    return stay_alive - not_upright_orientation - not_centered_position + hight
+    return stay_alive - not_upright_orientation*5 - position_offset*30 - angular_velocity*5
 end
 
 
@@ -134,8 +141,8 @@ function RLBase.reset!(env::VtolEnv{A,T}) where {A,T}
     env.ω_B = [0.0; 0.0; 0.0];
     env.wind_W = [0.0; 0.0; 0.0];
 
- 
-    env.state = [env.ω_B[2]; Rotations.params(RotYXZ(env.R_W))[1]; env.x_W[1]; env.x_W[3]]
+    rot =  Rotations.params(RotYXZ(env.R_W))
+    env.state = [rot[2], rot[1], rot[3], env.ω_B[1], env.ω_B[2], env.ω_B[3], env.x_W[1], env.x_W[2], env.x_W[3]]
     env.t = 0.0
     env.action = [0.0]
     env.done = false
@@ -148,7 +155,7 @@ end;
 function (env::VtolEnv)(a)
 
     # set the propeller trust and the two flaps 2D case
-    next_action = [a[1], a[1], a[2], a[2]]
+    next_action = [a[1], a[2], a[3], a[4]]
    
     _step!(env, next_action)
 end
@@ -173,19 +180,24 @@ function _step!(env::VtolEnv, next_action)
     env.t += env.Δt
     
     # State space
-    rot = Rotations.params(RotYXZ(env.R_W))[1]
-    env.state[1] = rot # rotation arround y
-    env.state[2] = env.ω_B[2] # rotation velocity arround y
-    env.state[3] = env.x_W[1] # world position along x
-    env.state[4] = env.x_W[3] # world position along z
+    rot = Rotations.params(RotYXZ(env.R_W))
+    env.state[1] = rot[2] # rotation arround x
+    env.state[2] = rot[1] # rotation arround y
+    env.state[3] = rot[3] # rotation arround z
+    env.state[4] = env.ω_B[1] # rotation velocity arround x
+    env.state[5] = env.ω_B[2] # rotation velocity arround y
+    env.state[6] = env.ω_B[3] # rotation velocity arround z
+    env.state[7] = env.x_W[1] # world position along x
+    env.state[8] = env.x_W[2] # world position along y
+    env.state[9] = env.x_W[3] # world position along z
     
     
     # Termination criteria
     env.done =
         #norm(v_B) > 2.0 || # stop if body is to fast
-        env.x_W[3] < -1.0 || # stop if body is below -1m
-        0.0 > rot || # Stop if the drone is pitched 90°.
-        rot > pi || # Stop if the drone is pitched 90°.
+        env.x_W[3] < -5.0 || # stop if body is below -2m
+        0.0 > rot[1] || # Stop if the drone is pitched 90°.
+        rot[1] > pi || # Stop if the drone is pitched 90°.
         env.t > 10 # stop after 10s
     nothing
 end;
@@ -194,7 +206,7 @@ end;
 
 seed = 123    
 rng = StableRNG(seed)
-N_ENV = 8
+N_ENV = 12
 UPDATE_FREQ = 1024
     
     
@@ -213,7 +225,8 @@ approximator = ActorCritic(
     actor = GaussianNetwork(
         pre = Chain(
         Dense(ns, 16, relu; initW = glorot_uniform(rng)),#
-        Dense(16, 16, relu; initW = glorot_uniform(rng)),
+        Dense(16, 24, relu; initW = glorot_uniform(rng)),
+        Dense(24, 16, relu; initW = glorot_uniform(rng)),
         ),
         μ = Chain(Dense(16, na; initW = glorot_uniform(rng))),
         logσ = Chain(Dense(16, na; initW = glorot_uniform(rng))),
@@ -271,6 +284,6 @@ end
 run(
         agent,
         env,
-        StopAfterStep(100_000),
-        DoEveryNStep(saveModel, n=40_000)
+        StopAfterStep(1_000_000),
+        DoEveryNStep(saveModel, n=50_000)
     )
