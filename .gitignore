@@ -1,1 +1,6 @@
 src/examples/RL_models/*
+src/examples/RL_models_landing/*
+src/examples/RL_models_landing2/*
+src/Manifest.toml
+Manifest.toml
+.gitignore
