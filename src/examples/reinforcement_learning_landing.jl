@@ -14,8 +14,10 @@ using Distributions;
 
 using Plots;
 using Statistics;
+using CUDA;
 
-using BSON: @save, @load # save mode
+# using BSON
+using BSON: @save, @load # save model
 
 
 Flyonic.Visualization.create_visualization();
@@ -126,13 +128,13 @@ function computeReward(env::VtolEnv{A,T}) where {A,T}
         success_reward += 100
     end
     
-    fast_rotation = min(0, env.state[2] - pi/2) * 100 # 90° per second is just admittable
-
+    
     close_to_center = (1 - (abs(env.state[3]) / 10) ^ 0.4) * 500.0
     close_to_height = (1 - (abs(env.state[4] - 5.0) / 5) ^0.4) * 300.0
-
-    not_upright_orientation = abs(angle_transformed) * 2 * (5 - min(5, abs(env.state[3]))) ^ 2
-    not_still = (abs(env.state[5]) + abs(env.state[6])) * (2 - min(2, abs(env.state[3]))) ^ 2
+    
+    not_upright_orientation = abs(angle_transformed) * 2 * (10 - min(10, abs(env.state[3])))
+    not_still = (abs(env.state[5]) + abs(env.state[6])) * (10 - min(10, abs(env.state[3])))
+    fast_rotation = min(0, (abs(env.state[2]) - pi/6) ^ 3) * 30 # 30° per second is admittable
     
     return stay_alive + success_reward + close_to_center + close_to_height - not_upright_orientation - not_still - fast_rotation
 end
@@ -146,7 +148,7 @@ function RLBase.reset!(env::VtolEnv{A,T}) where {A,T}
     Flyonic.Visualization.set_actuators(env.name, [0.0; 0.0; 0.0; 0.0])
     
     env.x_W = [-10.0; 0.0; 4.0];
-    env.v_B = [1.0; 0.0; 0.0];
+    env.v_B = [1.0; 0.3; 0.0];
     env.R_W = [0.9396926  0.0000000 -0.3420202; 0.0000000  1.0000000  0.0000000; 0.3420202  0.0000000  0.9396926 ];
     env.ω_B = [0.0; 0.0; 0.0];
     env.wind_W = [0.0; 0.0; 0.0];
@@ -279,7 +281,7 @@ end
 
 
 function loadModel()
-    f = joinpath("./src/examples/RL_models_landing2/", "vtol_ppo_2_1000000.bson")
+    f = joinpath("./src/examples/RL_models_landing2/", "vtol_ppo_2_2300000.bson")
     @load f model
     return model
 end
@@ -296,7 +298,7 @@ episode_test_reward_hook = TotalRewardPerEpisode(;is_display_on_exit=false)
 # create a env only for reward test
 test_env = VtolEnv(;name = "testVTOL", visualization = true, realtime = true);
 
-# agent.policy.approximator = loadModel();
+agent.policy.approximator = loadModel();
 
 
 run(
