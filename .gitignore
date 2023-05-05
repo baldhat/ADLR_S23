@@ -4,3 +4,4 @@ src/examples/RL_models_landing2/*
 src/Manifest.toml
 Manifest.toml
 .gitignore
+logs/*
