@@ -333,7 +333,7 @@ end
 
 
 function loadModel()
-    f = joinpath("./src/examples/RL_models_position/", "vtol_ppo_2_2400000.bson")
+    f = joinpath("./src/examples/RL_models_position/", "vtol_ppo_2_1500000.bson")
     @load f model
     return model
 end
@@ -351,12 +351,23 @@ episode_test_reward_hook = TotalRewardPerEpisode(;is_display_on_exit=false)
 # create a env only for reward test
 test_env = VtolEnv(;name = "testVTOL", visualization = true, realtime = true);
 
-# model = loadModel()
-# model = Flux.gpu(model)
-# agent.policy.approximator = model;
 
+eval_mode = true
 
-run(
+if eval_mode
+    model = loadModel()
+    model = Flux.gpu(model)
+    agent.policy.approximator = model;
+    for i = 1:10
+        run(
+            agent.policy, 
+            VtolEnv(;name = "testVTOL", visualization = true, realtime = true), 
+            StopAfterEpisode(1), 
+            episode_test_reward_hook
+        )
+    end
+else
+    run(
         agent,
         env,
         StopAfterStep(1_500_000),
@@ -378,3 +389,4 @@ run(
             end
         ),
     )
+end

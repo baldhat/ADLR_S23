@@ -78,8 +78,10 @@ function VtolEnv(;
     
     action_space = Space(
         ClosedInterval{T}[
-            0.0..3.0, # thrust
-            -1.0..1.0, # flaps 
+            0.0..3.0, # thrust let
+            0.0..3.0, # thrust right
+            -1.0..1.0, # flaps left
+            -1.0..1.0, # flaps right
             ], 
     )
 
@@ -155,32 +157,37 @@ RLBase.state(env::VtolEnv) = env.state
 function computeReward(env::VtolEnv{A,T}) where {A,T}
     
     stay_alive = 1.0
-    angle_transformed = env.state[1] + pi/2
-    if angle_transformed > pi
-        angle_transformed -= pi
+    x_angle_transformed = env.state[1] + pi/2
+    if x_angle_transformed > pi
+        x_angle_transformed -= pi
+    end
+
+    y_angle_transformed = env.state[2] - pi
+    if y_angle_transformed > pi
+        y_angle_transformed -= pi
     end
 
     success_reward = 0
     
-    l2_dist = ((env.state[3] - env.target_x)^2 + (env.state[4] - env.target_z)^2)
+    l2_dist = ((env.state[7] - env.target_x)^2 + (env.state[8] - env.target_y)^2 + (env.state[9] - env.target_z)^2)
     if l2_dist < 0.1
-        if abs(env.state[5]) < 0.05 && abs(env.state[6]) < 0.05
+        if abs(env.state[10]) < 0.05 && abs(env.state[11]) < 0.05 && abs(env.state[12])
             success_reward += 10
         end
         success_reward += 5
     end
     
     close_to_target = (1 - (l2_dist / 10) ^ 0.4) * 0.2
-    not_upright_orientation = abs(angle_transformed) * 0.01 * (5 - min(5, abs(env.state[3])))
-    not_still = (abs(env.state[5]) + abs(env.state[6])) * 0.005 * (3 - min(3, l2_dist))
-    fast_rotation = max(0, (abs(env.state[2]) - pi/6) ^ 2) * 0.005 # 30° per second is admittable
+    not_upright_orientation = (abs(y_angle_transformed) + abs(x_angle_transformed)) * 0.01 * (5 - min(5, abs(env.state[3])))
+    not_still = (abs(env.state[10]) + abs(env.state[11]) + abs(env.state[12])) * 0.005 * (3 - min(3, l2_dist))
+    fast_rotation = max(0, (abs(env.state[4]) - pi/6) ^ 2) * 0.005 + max(0, (abs(env.state[5]) - pi/6) ^ 2) * 0.005 + max(0, (abs(env.state[6]) - pi/6) ^ 2) * 0.005
     
     env.close_to_target += close_to_target
     env.not_upright_orientation -= not_upright_orientation
     env.not_still -= not_still
     env.fast_rotation -= fast_rotation
 
-    return stay_alive + success_reward + close_to_target - not_upright_orientation - not_still - fast_rotation
+    return (stay_alive + success_reward + close_to_target - not_upright_orientation - not_still - fast_rotation)
 end
 RLBase.reward(env::VtolEnv{A,T}) where {A,T} = computeReward(env)
 
@@ -198,7 +205,24 @@ function RLBase.reset!(env::VtolEnv{A,T}) where {A,T}
     env.wind_W = [0.0; 0.0; 0.0];
     v_W = env.R_W * env.v_B
  
-    env.state = [Rotations.params(RotYXZ(env.R_W))[1]; env.ω_B[2]; env.x_W[1]; env.x_W[3]; v_W[1]; v_W[3]; 5.0; 5.0; 5.0]
+    rot_params = Rotations.params(RotYXZ(env.R_W))
+    env.state = [
+        rot_params[1]; 
+        rot_params[2]; 
+        rot_params[3]; 
+        env.ω_B[1];
+        env.ω_B[2];
+        env.ω_B[3];
+        env.x_W[1];
+        env.x_W[2];
+        env.x_W[3];
+        v_W[1];
+        v_W[2];
+        v_W[3];
+        5.0; 
+        5.0; 
+        5.0
+    ]
     env.t = 0.0
     env.action = [0.0]
     env.done = false
@@ -216,7 +240,7 @@ end;
 function (env::VtolEnv)(a)
 
     # set the propeller trust and the two flaps 2D case
-    next_action = [a[1], a[1], a[2], a[2]]
+    next_action = [a[1], a[2], a[3], a[4]]
    
     _step!(env, next_action)
 end
@@ -246,24 +270,30 @@ function _step!(env::VtolEnv, next_action)
     env.t += env.Δt
     
     # State space
-    rot = Rotations.params(RotYXZ(env.R_W))[1]
-    env.state[1] = rot # rotation arround y
-    env.state[2] = env.ω_B[2] # rotation velocity arround y
-    env.state[3] = env.x_W[1] # world position along x
-    env.state[4] = env.x_W[3] # world position along z
+    rot = Rotations.params(RotYXZ(env.R_W))
+    env.state[1] = rot[1] # rotation arround x
+    env.state[2] = rot[2] # rotation arround y
+    env.state[3] = rot[3] # rotation arround z
+    env.state[4] = env.ω_B[1] # rotation velocity arround x
+    env.state[5] = env.ω_B[2] # rotation velocity arround y
+    env.state[6] = env.ω_B[3] # rotation velocity arround z
+    env.state[7] = env.x_W[1] # world position along x
+    env.state[8] = env.x_W[2] # world position along y
+    env.state[9] = env.x_W[3] # world position along z
     v_W = env.R_W * env.v_B
-    env.state[5] = v_W[1] # world velocity along x
-    env.state[6] = v_W[3] # world velocity along z
-    env.state[7] = env.target_x - env.x_W[1] # relative target position along x
-    env.state[8] = env.target_y - env.x_W[2] # relative target position along y
-    env.state[9] = env.target_z - env.x_W[3] # relative target position along z
+    env.state[10] = v_W[1] # world velocity along x
+    env.state[11] = v_W[2] # world velocity along x
+    env.state[12] = v_W[3] # world velocity along z
+    env.state[13] = env.target_x - env.x_W[1] # relative target position along x
+    env.state[14] = env.target_y - env.x_W[2] # relative target position along y
+    env.state[15] = env.target_z - env.x_W[3] # relative target position along z
     
     
     # Termination criteria
     env.done =
         #norm(v_B) > 2.0 || # stop if body is to fast
         env.x_W[3] < -1.0 || # stop if body is below -1m
-        abs(env.state[7]) > 15 || abs(env.state[8]) > 15 || abs(env.state[9]) > 15 ||
+        abs(env.state[13]) > 15 || abs(env.state[14]) > 15 || abs(env.state[15]) > 15 || # Too far from target
         # -pi > rot || # Stop if the drone is pitched 90°.
         # rot > pi/2 || # Stop if the drone is pitched 90°.
         env.t > 30 # stop after 30s
@@ -354,15 +384,25 @@ episode_test_reward_hook = TotalRewardPerEpisode(;is_display_on_exit=false)
 # create a env only for reward test
 test_env = VtolEnv(;name = "testVTOL", visualization = true, realtime = true);
 
-# model = loadModel()
-# model = Flux.gpu(model)
-# agent.policy.approximator = model;
+eval_mode = false
 
-
-run(
+if eval_mode
+    model = loadModel()
+    model = Flux.gpu(model)
+    agent.policy.approximator = model;
+    for i = 1:10
+        run(
+            agent.policy, 
+            VtolEnv(;name = "testVTOL", visualization = true, realtime = true), 
+            StopAfterEpisode(1), 
+            episode_test_reward_hook
+        )
+    end
+else
+    run(
         agent,
         env,
-        StopAfterStep(1_500_000),
+        StopAfterStep(2_500_000),
         ComposedHook(
             DoEveryNStep(saveModel, n=100_000), 
             DoEveryNStep(validate_policy, n=50_000),
@@ -381,3 +421,4 @@ run(
             end
         ),
     )
+end
