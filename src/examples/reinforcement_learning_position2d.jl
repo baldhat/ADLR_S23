@@ -4,6 +4,7 @@ using .Flyonic;
 using Rotations; # used for initial position
 
 using ReinforcementLearning;
+using Distributions;
 using StableRNGs;
 using Flux;
 using Flux.Losses;
@@ -48,11 +49,14 @@ mutable struct VtolEnv{A,T,ACT,R<:AbstractRNG} <: AbstractEnv # Parametric Const
     wind_W::Vector{T}
     Δt::T
 
-    close_to_center::T
-    close_to_height::T
+    close_to_target::T
     not_upright_orientation::T
     not_still::T
     fast_rotation::T
+
+    target_x::T
+    target_y::T
+    target_z::T
 end
 
 
@@ -75,7 +79,7 @@ function VtolEnv(;
     action_space = Space(
         ClosedInterval{T}[
             0.0..3.0, # thrust
-            -1.0..1.0, # flaps
+            -1.0..1.0, # flaps 
             ], 
     )
 
@@ -88,6 +92,9 @@ function VtolEnv(;
             typemin(T)..typemax(T), # world position along z
             typemin(T)..typemax(T), # world velocity along x
             typemin(T)..typemax(T), # world velocity along z
+            typemin(T)..typemax(T), # target position along x
+            typemin(T)..typemax(T), # target position along y
+            typemin(T)..typemax(T), # target position along z
             ], 
     )
     
@@ -109,17 +116,19 @@ function VtolEnv(;
         name,
         visualization, # visualization
         realtime, # realtime visualization
-        Array{T}([-10.0; 0.0; 4.0]), # x_W
-        Array{T}([1.0,0,0]), # v_B
-        Array{T}([0.9396926  0.0000000 -0.3420202; 0.0000000  1.0000000  0.0000000; 0.3420202  0.0000000  0.9396926 ]), # Float64... so T needs to be Float64
+        Array{T}([0.0; 0.0; 0.0]), # x_W
+        Array{T}([0,0,0]), # v_B
+        Array{T}(Matrix(Rotations.UnitQuaternion(RotY(-pi/2.0)*RotX(pi)))), # Float64... so T needs to be Float64
         zeros(T, 3), # ω_B
         zeros(T, 3), # wind_W
         T(0.025), # Δt  
-        0.0, # reward part for close_to_center
-        0.0, # reward part for close_to_height
+        0.0, # reward part for close_to_target
         0.0, # reward part for not_upright_orientation
         0.0, # reward part for not_still
-        0.0 # reward part for fast_rotation
+        0.0, # reward part for fast_rotation
+        rand(Uniform(-10, 10)), # target position x
+        0.0, # target position y
+        rand(Uniform(5, 10))  # target position z
     )
     
     RLBase.reset!(environment)
@@ -138,35 +147,33 @@ RLBase.state(env::VtolEnv) = env.state
 
 function computeReward(env::VtolEnv{A,T}) where {A,T}
     
-    stay_alive = 2.0
+    stay_alive = 1.0
     angle_transformed = env.state[1] + pi/2
     if angle_transformed > pi
         angle_transformed -= pi
     end
 
     success_reward = 0
-    if abs(env.state[3]) < 0.1 && abs(env.state[4] - 5.0) < 0.1
+    
+    l2_dist = ((env.state[3] - env.target_x)^2 + (env.state[4] - env.target_z)^2)
+    if l2_dist < 0.1
         if abs(env.state[5]) < 0.05 && abs(env.state[6]) < 0.05
-            success_reward += 4
+            success_reward += 10
         end
-        success_reward += 1
+        success_reward += 5
     end
     
+    close_to_target = (1 - (l2_dist / 10) ^ 0.4) * 0.2
+    not_upright_orientation = abs(angle_transformed) * 0.01 * (5 - min(5, abs(env.state[3])))
+    not_still = (abs(env.state[5]) + abs(env.state[6])) * 0.005 * (3 - min(3, l2_dist))
+    fast_rotation = max(0, (abs(env.state[2]) - pi/6) ^ 2) * 0.005 # 30° per second is admittable
     
-    close_to_center = (1 - (abs(env.state[3]) / 10) ^ 0.4) * 0.2
-    close_to_height = (1 - (abs(env.state[4] - 5.0) / 5) ^0.4) * 0.1
-    
-    not_upright_orientation = abs(angle_transformed) * 0.005 * (5 - min(5, abs(env.state[3])))
-    not_still = (abs(env.state[5]) + abs(env.state[6])) * 0.005 * (5 - min(5, abs(env.state[3])))
-    fast_rotation = max(0, (abs(env.state[2]) - pi/6) ^ 2) * 0.0005 # 30° per second is admittable
-    
-    env.close_to_center += close_to_center
-    env.close_to_height += close_to_height
+    env.close_to_target += close_to_target
     env.not_upright_orientation -= not_upright_orientation
     env.not_still -= not_still
     env.fast_rotation -= fast_rotation
 
-    return stay_alive + success_reward + close_to_center + close_to_height - not_upright_orientation - not_still - fast_rotation
+    return stay_alive + success_reward + close_to_target - not_upright_orientation - not_still - fast_rotation
 end
 RLBase.reward(env::VtolEnv{A,T}) where {A,T} = computeReward(env)
 
@@ -177,22 +184,20 @@ function RLBase.reset!(env::VtolEnv{A,T}) where {A,T}
         Flyonic.Visualization.set_actuators(env.name, [0.0; 0.0; 0.0; 0.0])
     end
     
-    env.x_W = [-10.0; 0.0; 4.0];
-    env.v_B = [1.0; 0.3; 0.0];
-    env.R_W = Matrix(Rotations.UnitQuaternion(RotY(-pi/2.0)*RotX(pi)))
+    env.x_W = [0.0; 0.0; 0.0];
+    env.v_B = [0.0; 0.0; 0.0];
+    env.R_W = Matrix(UnitQuaternion(RotY(-pi/2.0)*RotX(pi)));
     env.ω_B = [0.0; 0.0; 0.0];
     env.wind_W = [0.0; 0.0; 0.0];
     v_W = env.R_W * env.v_B
-
  
-    env.state = [Rotations.params(RotYXZ(env.R_W))[1]; env.ω_B[2]; env.x_W[1]; env.x_W[3]; v_W[1]; v_W[3]]
+    env.state = [Rotations.params(RotYXZ(env.R_W))[1]; env.ω_B[2]; env.x_W[1]; env.x_W[3]; v_W[1]; v_W[3]; rand(Uniform(-10, 10)); 0.0; rand(Uniform(5, 10))]
     env.t = 0.0
     env.action = [0.0]
     env.done = false
 
 
-    env.close_to_center = 0.0
-    env.close_to_height = 0.0
+    env.close_to_target = 0.0
     env.not_upright_orientation = 0.0
     env.not_still = 0.0
     env.fast_rotation = 0.0
@@ -240,17 +245,23 @@ function _step!(env::VtolEnv, next_action)
     env.state[3] = env.x_W[1] # world position along x
     env.state[4] = env.x_W[3] # world position along z
     v_W = env.R_W * env.v_B
-    env.state[5] = v_W[1] # world position along x
-    env.state[6] = v_W[3] # world position along z
+    env.state[5] = v_W[1] # world velocity along x
+    env.state[6] = v_W[3] # world velocity along z
+    env.state[7] = env.target_x - env.x_W[1] # relative target position along x
+    env.state[8] = env.target_y - env.x_W[2] # relative target position along y
+    env.state[9] = env.target_z - env.x_W[3] # relative target position along z
     
+    angle_transformed = env.state[1] + pi/2
     
     # Termination criteria
     env.done =
         #norm(v_B) > 2.0 || # stop if body is to fast
         env.x_W[3] < -1.0 || # stop if body is below -1m
+        abs(env.state[7]) > 15 || abs(env.state[8]) > 15 || abs(env.state[9]) > 15 ||
+   
         # -pi > rot || # Stop if the drone is pitched 90°.
         # rot > pi/2 || # Stop if the drone is pitched 90°.
-        env.t > 45 # stop after 10s
+        env.t > 30 # stop after 30s
     nothing
 end;
 
@@ -258,7 +269,7 @@ end;
 
 seed = 123    
 rng = StableRNG(seed)
-N_ENV = 32
+N_ENV = 64
 UPDATE_FREQ = 1024
     
     
@@ -315,22 +326,24 @@ agent = Agent( # A wrapper of an AbstractPolicy
 
 function saveModel(t, agent, env)
     model = cpu(agent.policy.approximator)   
-    f = joinpath("./src/examples/RL_models_landing2/", "vtol_ppo_2_$t.bson")
+    f = joinpath("./src/examples/RL_models_position/", "vtol_ppo_2_rot_cap_$t.bson")
     @save f model
     println("parameters at step $t saved to $f")
 end
 
 
 function loadModel()
-    f = joinpath("./src/examples/RL_models_landing2/", "vtol_ppo_2_2400000.bson")
+    f = joinpath("./src/examples/RL_models_position/", "vtol_ppo_2_1500000.bson")
     @load f model
     return model
 end
 
 function validate_policy(t, agent, env)
     run(agent.policy, test_env, StopAfterEpisode(1), episode_test_reward_hook)
+    println("Static target: test reward at step $t: $(episode_test_reward_hook.rewards[end])")
+    run(agent.policy, VtolEnv(;name = "testVTOL", visualization = true, realtime = true), StopAfterEpisode(1), episode_test_reward_hook)
     # the result of the hook
-    # println("test reward at step $t: $(episode_test_reward_hook.rewards[end])")
+    println("Random target: test reward at step $t: $(episode_test_reward_hook.rewards[end])")
     
 end
 
@@ -338,32 +351,42 @@ episode_test_reward_hook = TotalRewardPerEpisode(;is_display_on_exit=false)
 # create a env only for reward test
 test_env = VtolEnv(;name = "testVTOL", visualization = true, realtime = true);
 
-# model = loadModel()
-# model = Flux.gpu(model)
-# agent.policy.approximator = model;
 
+eval_mode = true
 
-run(
+if eval_mode
+    model = loadModel()
+    model = Flux.gpu(model)
+    agent.policy.approximator = model;
+    for i = 1:10
+        run(
+            agent.policy, 
+            VtolEnv(;name = "testVTOL", visualization = true, realtime = true), 
+            StopAfterEpisode(1), 
+            episode_test_reward_hook
+        )
+    end
+else
+    run(
         agent,
         env,
-        StopAfterStep(50_000_000),
+        StopAfterStep(1_500_000),
         ComposedHook(
             DoEveryNStep(saveModel, n=100_000), 
-            DoEveryNStep(validate_policy, n=100_000),
+            DoEveryNStep(validate_policy, n=50_000),
             DoEveryNStep(n=1_000) do  t, agent, env
                 Base.with_logger(logger) do
-                    close_to_center = mean([sub_env.close_to_center for sub_env in env])
-                    close_to_height = mean([sub_env.close_to_height for sub_env in env])
+                    close_to_target = mean([sub_env.close_to_target for sub_env in env])
                     not_upright_orientation = mean([sub_env.not_upright_orientation for sub_env in env])
                     not_still = mean([sub_env.not_still for sub_env in env])
                     fast_rotation = mean([sub_env.fast_rotation for sub_env in env])
-                    @info "reward" close_to_center = close_to_center
-                    @info "reward" close_to_height = close_to_height
+                    @info "reward" close_to_target = close_to_target
                     @info "reward" not_upright_orientation = not_upright_orientation
                     @info "reward" not_still = not_still
                     @info "reward" fast_rotation = fast_rotation
-                    @info "reward" total = close_to_center + close_to_height + not_upright_orientation + not_still + fast_rotation 
+                    @info "reward" total = close_to_target + not_upright_orientation + not_still + fast_rotation 
                 end
             end
         ),
     )
+end
