@@ -154,9 +154,9 @@ function computeReward(env::VtolEnv{A,T}) where {A,T}
     
     
     close_to_center = (1 - (abs(env.state[3]) / 10) ^ 0.4) * 0.2
-    close_to_height = (1 - (abs(env.state[4] - 5.0) / 5) ^0.4) *0.1
+    close_to_height = (1 - (abs(env.state[4] - 5.0) / 5) ^0.4) * 0.1
     
-    not_upright_orientation = abs(angle_transformed) * 0.01 * (5 - min(5, abs(env.state[3])))
+    not_upright_orientation = abs(angle_transformed) * 0.005 * (5 - min(5, abs(env.state[3])))
     not_still = (abs(env.state[5]) + abs(env.state[6])) * 0.005 * (5 - min(5, abs(env.state[3])))
     fast_rotation = max(0, (abs(env.state[2]) - pi/6) ^ 2) * 0.0005 # 30° per second is admittable
     
