@@ -5,3 +5,6 @@ src/Manifest.toml
 Manifest.toml
 .gitignore
 logs/*
+.vscode/*
+src/examples/RL_models_landing_3d/*
+Project.toml
