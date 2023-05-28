@@ -107,10 +107,10 @@ function VtolEnv(;
             typemin(T)..typemax(T), # delta rotation z axis in world coordinates (x component)
             typemin(T)..typemax(T), # delta rotation z axis in world coordinates (y component)
             typemin(T)..typemax(T), # delta rotation z axis in world coordinates (z component)
-            typemin(T)..typemax(T), # last left thrust
-            typemin(T)..typemax(T), # last right thrust
-            typemin(T)..typemax(T), # last left flap
-            typemin(T)..typemax(T), # last right flap
+            typemin(T)..typemax(T), # difference in action to last iteration (left thrust)
+            typemin(T)..typemax(T), # difference in action to last iteration (right thrust)
+            typemin(T)..typemax(T), # difference in action to last iteration (left flap)
+            typemin(T)..typemax(T), # difference in action to last iteration (right flap)
             ], 
     )
     
@@ -134,9 +134,9 @@ function VtolEnv(;
         visualization, # visualization
         realtime, # realtime visualization
         
-        Array{T}([0.0; 0.0; 0.0]), # x_W
-        Array{T}([0.0; 0.0; 0.0]), # v_B
-        Array{T}(Matrix(RotY(-pi/2))), # R_W
+        Array{T}([-30.0; 0.0; 20.0]), # x_W
+        Array{T}([6.0; 0.0; 0.0]), # v_B
+        Array{T}(Matrix(RotY(-10*pi/180))), # R_W
         zeros(T, 3), # ω_B
         zeros(T, 3), # wind_W
         T(0.025), # Δt  
@@ -212,7 +212,7 @@ function computeReward(env::VtolEnv{A,T}) where {A,T}
     vel_penalty = l2_vel * masking_weight * 0.1
 
     # penalize excessively large rotational speeds (> 1 rad / s)
-    rot_vel_penalty = (max(pi, l2_rot_vel) - pi) * 0.01
+    rot_vel_penalty = (max(pi, l2_rot_vel) - pi) * 0.001
 
     # penalize large thrust rate
     action_rates = (env.action- env.state[16:19]) / env.Δt
@@ -248,9 +248,9 @@ function RLBase.reset!(env::VtolEnv{A,T}) where {A,T}
         Flyonic.Visualization.set_actuators(env.name, [0.0; 0.0; 0.0; 0.0])
     end
     
-    env.x_W = [0.0; 0.0; 0.0]
-    env.v_B = [0.0; 0.0; 0.0]
-    env.R_W = Array{T}(Matrix(RotY(-pi/2.0)))
+    env.x_W = Array{T}([-30.0; 0.0; 20.0])
+    env.v_B = Array{T}([5.9; 0.0; 1.04])
+    env.R_W = Array{T}(Matrix(RotY(-10*pi/180)))
     env.ω_B = [0.0; 0.0; 0.0]
     env.wind_W = [0.0; 0.0; 0.0]
     v_W = env.R_W * env.v_B
@@ -352,8 +352,8 @@ function _step!(env::VtolEnv, next_action)
     # Termination criteria
     env.done =
         #norm(v_B) > 2.0 || # stop if body is to fast
-        env.x_W[3] < -5.0 || # stop if body is below -1m
-        any(env.state[7:9] .> 15)|| # Too far from target
+        env.x_W[3] < -1.0 || # stop if body is below -1m
+        (env.t > 10 && any(env.state[7:9] .> 15))|| # Too far from target after 10 seconds
         # -pi > rot || # Stop if the drone is pitched 90°.
         # rot > pi/2 || # Stop if the drone is pitched 90°.
         env.t > 30 # stop after 30s
@@ -442,7 +442,7 @@ episode_test_reward_hook = TotalRewardPerEpisode(;is_display_on_exit=true)
 # create a env only for reward test
 test_env = VtolEnv(;name = "testVTOL", visualization = true, realtime = true);
 
-eval_mode = true
+eval_mode = false
 
 if eval_mode
     model = loadModel()
