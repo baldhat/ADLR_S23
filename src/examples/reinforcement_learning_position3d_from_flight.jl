@@ -134,12 +134,12 @@ function VtolEnv(;
         visualization, # visualization
         realtime, # realtime visualization
         
-        Array{T}([-30.0; 0.0; 20.0]), # x_W
+        Array{T}([-20.0; 0.0; 10.0]), # x_W
         Array{T}([6.0; 0.0; 0.0]), # v_B
         Array{T}(Matrix(RotY(-10*pi/180))), # R_W
         zeros(T, 3), # ω_B
         zeros(T, 3), # wind_W
-        T(0.025), # Δt  
+        T(0.005), # Δt  
 
         0.0, # reward part for success
         0.0, # reward part for stay_alive
@@ -212,7 +212,7 @@ function computeReward(env::VtolEnv{A,T}) where {A,T}
     vel_penalty = l2_vel * masking_weight * 0.1
 
     # penalize excessively large rotational speeds (> 1 rad / s)
-    rot_vel_penalty = (max(pi, l2_rot_vel) - pi) * 0.001
+    rot_vel_penalty = (max(pi, l2_rot_vel) - pi) * 0.001 * masking_weight
 
     # penalize large thrust rate
     action_rates = (env.action- env.state[16:19]) / env.Δt
@@ -224,7 +224,8 @@ function computeReward(env::VtolEnv{A,T}) where {A,T}
     flap_rate_reward = (weighting_fun(action_rates[3], 100) + weighting_fun(action_rates[4], 10)) *  0.1
     env.previous_action = env.state[16:19]
 
-    reward = success_reward + stay_alive_reward + translation_reward  + thrust_rate_reward + flap_rate_reward - angle_penalty - vel_penalty - rot_vel_penalty
+    # reward = success_reward + stay_alive_reward + translation_reward  + thrust_rate_reward + flap_rate_reward - angle_penalty - vel_penalty - rot_vel_penalty
+    reward = success_reward + stay_alive_reward + translation_reward
     # sum up to part_wise return
     env.success_reward += success_reward
     env.stay_alive_reward += stay_alive_reward
@@ -248,7 +249,7 @@ function RLBase.reset!(env::VtolEnv{A,T}) where {A,T}
         Flyonic.Visualization.set_actuators(env.name, [0.0; 0.0; 0.0; 0.0])
     end
     
-    env.x_W = Array{T}([-30.0; 0.0; 20.0])
+    env.x_W = Array{T}([-20.0; 0.0; 10.0])
     env.v_B = Array{T}([5.9; 0.0; 1.04])
     env.R_W = Array{T}(Matrix(RotY(-10*pi/180)))
     env.ω_B = [0.0; 0.0; 0.0]
@@ -402,6 +403,8 @@ agent = Agent( # A wrapper of an AbstractPolicy
                 approximator = approximator |> gpu,
                 update_freq=UPDATE_FREQ,
                 dist = Normal,
+                # clip_range = 0.2f0,
+                # max_grad_norm = 0.1f0,
                 # For parameters visit the docu: https://juliareinforcementlearning.org/docs/rlzoo/#ReinforcementLearningZoo.PPOPolicy
                 ),
 
