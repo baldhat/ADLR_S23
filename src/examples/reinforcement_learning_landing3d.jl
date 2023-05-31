@@ -56,12 +56,16 @@ mutable struct VtolEnv{A,T,ACT,R<:AbstractRNG} <: AbstractEnv # Parametric Const
     angle_penalty::T
     vel_penalty::T
     rot_vel_penalty::T
+    output_penalty::T
     thrust_rate_reward::T
     flap_rate_reward::T
     Return::T
 
     x_target::Vector{T}
     R_target::Matrix{T}
+
+    last_output::Array{T}
+    l2_dist::T
 end
 
 function VtolEnv(;
@@ -107,10 +111,13 @@ function VtolEnv(;
             typemin(T)..typemax(T), # delta rotation z axis in world coordinates (x component)
             typemin(T)..typemax(T), # delta rotation z axis in world coordinates (y component)
             typemin(T)..typemax(T), # delta rotation z axis in world coordinates (z component)
-            typemin(T)..typemax(T), # difference in action to last iteration (left thrust)
-            typemin(T)..typemax(T), # difference in action to last iteration (right thrust)
-            typemin(T)..typemax(T), # difference in action to last iteration (left flap)
-            typemin(T)..typemax(T), # difference in action to last iteration (right flap)
+            typemin(T)..typemax(T), # position x (x component)
+            typemin(T)..typemax(T), # position y in world coordinates (y component)
+            typemin(T)..typemax(T), # position in world coordinates (z component)
+            # typemin(T)..typemax(T), # difference in action to last iteration (left thrust)
+            # typemin(T)..typemax(T), # difference in action to last iteration (right thrust)
+            # typemin(T)..typemax(T), # difference in action to last iteration (left flap)
+            # typemin(T)..typemax(T), # difference in action to last iteration (right flap)
             ], 
     )
     
@@ -139,7 +146,7 @@ function VtolEnv(;
         Array{T}(Matrix(RotZ(pi/4))), # R_W
         zeros(T, 3), # ω_B
         zeros(T, 3), # wind_W
-        T(0.025), # Δt  
+        T(0.005), # Δt  
 
         0.0, # reward part for success
         0.0, # reward part for stay_alive
@@ -147,6 +154,7 @@ function VtolEnv(;
         0.0, # reward part for not_upright_orientation
         0.0, # reward part for not_still
         0.0, # reward part for fast_rotation
+        0.0, # reward for large outputs
         0.0, # reward part for thrust_rate_reward
         0.0, # reward part for flap_rate_reward
         0.0, # overall return
@@ -154,7 +162,10 @@ function VtolEnv(;
         # Array{T}([-5.0+rand()*10.0; -5.0+rand()*10.0; 4.0+2.0*rand()]), # x_target
         # Array{T}(Matrix(RotY(-pi/2)*RotX(rand()*2*pi))) # R_target
         Array{T}([0, 0, 2]), # x_target
-        Array{T}(Matrix(RotY(-pi/2))) # R_target
+        Array{T}(Matrix(RotY(-pi/2))), # R_target
+        
+        Array{T}([0, 0, 0, 0]),
+        0.0 # l2_dist
     )
     
     RLBase.reset!(environment)
@@ -173,7 +184,7 @@ RLBase.state(env::VtolEnv) = env.state
 
 function computeReward(env::VtolEnv{A,T}) where {A,T}
     # constants and functions for tuning
-    APPROACH_RADIUS = 1 # radius where the drone should transition to hovering
+    APPROACH_RADIUS = 2.5 # radius where the drone should transition to hovering
     weighting_fun = (x, r) -> (1 - (abs(x / r)) ^ 0.4)
     
     # extract movement metrics from state_space
@@ -191,19 +202,20 @@ function computeReward(env::VtolEnv{A,T}) where {A,T}
     masking_weight = max(0, weighting_fun(l2_dist, APPROACH_RADIUS))
     
     # stay alive
-    stay_alive_reward = env.t < 2 ? 0.005 : 0.0005
+    stay_alive_reward = env.t < 2 ? 0.05 : 0.005
     
     # high reward when very close to target state
     success_reward = 0
-    if l2_dist < 0.05
-        if l2_vel < 0.05
+    if l2_dist < 0.2
+        if l2_vel < 0.1
             success_reward += 0.3
         end
         success_reward += 0.1
     end
     
     # reward or penalty for being close to target
-    translation_reward = (min(2, 1/ sqrt(l2_dist)) + max(0, 0.5 - 8 * l2_dist ^ 2)) * 0.1
+    # translation_reward = (min(2, 1/ sqrt(l2_dist)) + max(0, 0.5 - 8 * l2_dist ^ 2)) * 0.5
+    translation_reward = (1 - (l2_dist / 10) ^ 0.4) * 0.5
     
     # angle deviation from target
     angle_penalty = delta_angle * masking_weight * 0.1
@@ -215,25 +227,29 @@ function computeReward(env::VtolEnv{A,T}) where {A,T}
     rot_vel_penalty = (max(pi, l2_rot_vel) - pi) * 0.01
 
     # penalize large thrust rate
-    action_rates = (env.action- env.state[16:19]) / env.Δt
+    # action_rates = (env.action- env.state[16:19]) / env.Δt
     # thrust_rate_penalty= sum(action_rates[1:2].^2) * 0.0005
-    thrust_rate_reward = (weighting_fun(action_rates[1], 100) + weighting_fun(action_rates[2], 10)) *  0.1
+    # thrust_rate_reward = (weighting_fun(action_rates[1], 100) + weighting_fun(action_rates[2], 10)) *  0.1
     
     # penalize large flap rate
     # flap_rate_penalty= sum(action_rates[3:4].^2) * 0.002
-    flap_rate_reward = (weighting_fun(action_rates[3], 100) + weighting_fun(action_rates[4], 10)) *  0.1
-    env.previous_action = env.state[16:19]
+    # flap_rate_reward = (weighting_fun(action_rates[3], 100) + weighting_fun(action_rates[4], 10)) *  0.1
+    # env.previous_action = env.state[16:19]
 
-    reward = success_reward + stay_alive_reward + translation_reward  + thrust_rate_reward + flap_rate_reward - angle_penalty - vel_penalty - rot_vel_penalty
+    output_penalty = ((max(abs(env.last_output[1]) - 3, 0)) +  (max(abs(env.last_output[2]) - 3, 0)) + (max(abs(env.last_output[3]) - 3, 0)) + (max(abs(env.last_output[4]) - 3, 0))) * 0.01
+
+    reward = success_reward + stay_alive_reward + translation_reward  - angle_penalty - vel_penalty - rot_vel_penalty - output_penalty # + thrust_rate_reward + flap_rate_reward
+
     # sum up to part_wise return
     env.success_reward += success_reward
     env.stay_alive_reward += stay_alive_reward
     env.translation_reward += translation_reward
-    env.thrust_rate_reward += thrust_rate_reward
-    env.flap_rate_reward += flap_rate_reward
+    # env.thrust_rate_reward += thrust_rate_reward
+    # env.flap_rate_reward += flap_rate_reward
     env.angle_penalty -= angle_penalty
     env.vel_penalty -= vel_penalty
     env.rot_vel_penalty -= rot_vel_penalty
+    env.output_penalty -= output_penalty
     env.Return += reward
 
     return reward
@@ -263,27 +279,31 @@ function RLBase.reset!(env::VtolEnv{A,T}) where {A,T}
     env.R_target = Array{T}(Matrix(RotY(-pi/2))) # R_target
     
     delta_rotation = transpose(env.R_target) * env.R_W
-    delta_target = transpose(env.R_W)*(env.x_W[1]-env.x_target[1])
+    delta_target = transpose(env.R_W)*(env.x_target - env.x_W)
+    # delta_target = env.x_target - env.x_W
     env.state = [
         env.ω_B[1]; # rotation velocity arround body x
         env.ω_B[2]; # rotation velocity arround body y
         env.ω_B[3]; # rotation velocity arround body z
-        v_W[1]; # delta world position along x
-        v_W[2]; # delta world position along y
-        v_W[3]; # delta world position along z
-        delta_target[1]; # delta world position along x
-        delta_target[2]; # delta world position along y
-        delta_target[3]; # delta world position along z
+        v_W[1]; # world velocity along x
+        v_W[2]; # world velocity along y
+        v_W[3]; # world velocity along z
+        delta_target[1]; # delta target position along x
+        delta_target[2]; # delta target position along y
+        delta_target[3]; # delta target position along z
         delta_rotation[1, 1]; # delta rotation x axis in world coordinates (x component)
         delta_rotation[2, 1]; # delta rotation x axis in world coordinates (y component)
         delta_rotation[3, 1]; # delta rotation x axis in world coordinates (z component)
         delta_rotation[1, 2]; # delta rotation z axis in world coordinates (x component)
         delta_rotation[2, 2]; # delta rotation z axis in world coordinates (y component)
         delta_rotation[3, 2]; # delta rotation z axis in world coordinates (z component)
-        env.action[1]; # difference in action to last iteration (left thrust)
-        env.action[2]; # difference in action to last iteration (right thrust)
-        env.action[3]; # difference in action to last iteration (left flap)
-        env.action[4] # difference in action to last iteration (right flap)
+        env.x_W[1];
+        env.x_W[2];
+        env.x_W[3];
+        # env.action[1]; # difference in action to last iteration (left thrust)
+        # env.action[2]; # difference in action to last iteration (right thrust)
+        # env.action[3]; # difference in action to last iteration (left flap)
+        # env.action[4] # difference in action to last iteration (right flap)
         ]
     env.t = 0.0
     env.action = rand(env.action_space)
@@ -291,14 +311,18 @@ function RLBase.reset!(env::VtolEnv{A,T}) where {A,T}
     env.done = false
 
     env.success_reward = 0.0
-    env.stay_alive_reward = 0.0
-    env.translation_reward = 0.0
+    env.stay_alive_reward  = 0.0
+    env.translation_reward  = 0.0
+    env.thrust_rate_reward = 0.0
+    env.flap_rate_reward  = 0.0
     env.angle_penalty = 0.0
     env.vel_penalty = 0.0
     env.rot_vel_penalty = 0.0
-    env.thrust_rate_reward = 0.0
-    env.flap_rate_reward = 0.0
+    env.output_penalty = 0.0
     env.Return = 0.0
+    env.last_output = Array{T}([0, 0, 0, 0])
+    env.l2_dist = 0.0;
+
     nothing
 end;
 
@@ -307,11 +331,13 @@ function (env::VtolEnv)(a)
     # So when a VtolEnv object is created, it has this method that can be called
 
     # set the propeller trust and the two flaps 2D case
+
     next_action = [max(range(env.action_space[1])[1], min(range(env.action_space[1])[end],  a[1])), 
                    max(range(env.action_space[2])[1], min(range(env.action_space[2])[end],  a[2])),
                    max(range(env.action_space[3])[1], min(range(env.action_space[3])[end],  a[3])),
                    max(range(env.action_space[4])[1], min(range(env.action_space[4])[end],  a[4]))]
-   
+
+    env.last_output = a
     _step!(env, next_action)
 end
 
@@ -344,27 +370,30 @@ function _step!(env::VtolEnv, next_action)
     env.state[1:3] = env.ω_B # rotation velocity
     v_W = env.R_W * env.v_B
     env.state[4:6] = v_W # world velocity
-    env.state[7:9] = transpose(env.R_W) * (env.x_W - env.x_target) # relative target position in body frame
+    env.state[16:18] = env.x_W
+    env.state[7:9] = transpose(env.R_W) * (env.x_target - env.x_W) # relative target position in body frame
+    # env.state[7:9] = env.x_target - env.x_W # relative target position in body frame
     delta_rotation = transpose(env.R_target) * env.R_W
     env.state[10:12] = delta_rotation[:, 1] # delta rotation x axis in world coordinates
     env.state[13:15] = delta_rotation[:, 2] # delta rotation z axis in world coordinates
-    env.state[16:19] = env.previous_action 
+    # env.state[16:19] = env.previous_action 
+    env.l2_dist = norm(env.state[7:9])
     
     # Termination criteria
     env.done =
         #norm(v_B) > 2.0 || # stop if body is to fast
-        env.x_W[3] < -0.0 || # stop if body is below -1m
-        any(env.state[7:9] .> 15)|| # Too far from target
+        env.x_W[3] < -0.0 || # stop if body is below 0m
+        abs(env.state[7] .> 15) || abs(env.state[8] .> 15) || abs(env.state[9] .> 15) || # Too far from target
         # -pi > rot || # Stop if the drone is pitched 90°.
         # rot > pi/2 || # Stop if the drone is pitched 90°.
-        env.t > 30 # stop after 30s
+        env.t > 15 # stop after 30s
     nothing
 end;
 
 
 seed = 123    
 rng = StableRNG(seed)
-N_ENV = 4
+N_ENV = 12
 UPDATE_FREQ = 1024
     
 # define multiple environments for parallel training
@@ -375,24 +404,23 @@ env = MultiThreadEnv([
 
 
 
-
 # Define the function approximator
 ns, na = length(state(env[1])), length(action_space(env[1]))
 approximator = ActorCritic(
     actor = GaussianNetwork(
         pre = Chain(
-        Dense(ns, 16, relu; initW = glorot_uniform(rng)),
-        Dense(16, 16, relu; initW = glorot_uniform(rng)),
+        Dense(ns, 32, tanh; initW = glorot_uniform(rng)),
+        Dense(32, 32, tanh; initW = glorot_uniform(rng)),
         ),
-        μ = Chain(Dense(16, na, tanh; initW = glorot_uniform(rng))),
-        logσ = Chain(Dense(16, na, tanh; initW = glorot_uniform(rng))),
+        μ = Dense(32, na; initW = glorot_uniform(rng)),
+        logσ = Dense(32, na; initW = glorot_uniform(rng))
     ),
     critic = Chain(
-        Dense(ns, 16, relu; initW = glorot_uniform(rng)),
-        Dense(16, 16, relu; initW = glorot_uniform(rng)),
-        Dense(16, 1, tanh; initW = glorot_uniform(rng)),
+        Dense(ns, 32, tanh; initW = glorot_uniform(rng)),
+        Dense(32, 32, tanh; initW = glorot_uniform(rng)),
+        Dense(32, 1; initW = glorot_uniform(rng)),
     ),
-    optimizer = ADAM(1e-3),
+    optimizer = ADAM(1e-4),
 );
 
 
@@ -427,7 +455,7 @@ end
 
 
 function loadModel()
-    f = joinpath("./src/examples/working_models/", "hover_at_5,5,5_slower_flaps.bson")
+    f = joinpath("./src/examples/RL_models_landing_3d/", "vtol_ppo_2_1000000.bson")
     @load f model
     return model
 end
@@ -437,6 +465,16 @@ function validate_policy(t, agent, env)
     # the result of the hook
     println("test reward at step $t: $(episode_test_reward_hook.rewards[end])")
     
+end
+
+function show_gradient(t, agent, env)
+    v, g = Flux.params(agent.policy.approximator.actor.logσ)
+
+    if(isnan(g[1]))
+        fv, fg = Flux.params(agent.policy.approximator.actor.pre)
+        println(fg)
+        println(fv)
+    end
 end
 
 episode_test_reward_hook = TotalRewardPerEpisode(;is_display_on_exit=true)
@@ -465,10 +503,11 @@ else
     run(
         agent,
         env,
-        StopAfterStep(50_000_000),
+        StopAfterStep(10_000_000),
         ComposedHook(
             DoEveryNStep(saveModel, n=100_000), 
             DoEveryNStep(validate_policy, n=50_000),
+            DoEveryNStep(show_gradient, n=1),
             DoEveryNStep(n=5_000) do  t, agent, env
                 Base.with_logger(logger) do
                     success_reward = mean([sub_env.success_reward for sub_env in env])
@@ -479,6 +518,8 @@ else
                     rot_vel_penalty = mean([sub_env.rot_vel_penalty for sub_env in env])
                     thrust_rate_reward = mean([sub_env.thrust_rate_reward for sub_env in env])
                     flap_rate_reward = mean([sub_env.flap_rate_reward for sub_env in env])
+                    output_penalty = mean([sub_env.output_penalty for sub_env in env])                    
+                    l2_dist = mean([sub_env.l2_dist for sub_env in env])                    
                     Return = mean([sub_env.Return for sub_env in env])
                     @info "reward" success_reward = success_reward
                     @info "reward" stay_alive_reward = stay_alive_reward
@@ -489,6 +530,12 @@ else
                     @info "reward" thrust_rate_reward = thrust_rate_reward
                     @info "reward" flap_rate_reward = flap_rate_reward
                     @info "reward" Return = Return
+                    @info "metrics" l2_dist = l2_dist
+                    @info "reward" output_penalty = output_penalty
+                    @info "action" last_output1 = env[1].last_output[1]
+                    @info "action" last_output2 = env[1].last_output[2]
+                    @info "action" last_output3 = env[1].last_output[3]
+                    @info "action" last_output4 = env[1].last_output[4]
                 end
             end
         ),
