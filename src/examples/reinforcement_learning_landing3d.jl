@@ -378,6 +378,13 @@ function _step!(env::VtolEnv, next_action)
     env.state[13:15] = delta_rotation[:, 2] # delta rotation z axis in world coordinates
     # env.state[16:19] = env.previous_action 
     env.l2_dist = norm(env.state[7:9])
+
+    if eval_mode
+        push!(plotting_position_errors, norm(env.x_W - env.x_target))
+        push!(plotting_rotation_errors, rotation_angle(RotMatrix{3}(delta_rotation)))
+        push!(plotting_actions, next_action)
+        push!(plotting_return, env.Return)
+    end
     
     # Termination criteria
     env.done =
@@ -455,7 +462,7 @@ end
 
 
 function loadModel()
-    f = joinpath("./src/examples/RL_models_landing_3d/", "vtol_ppo_2_1000000.bson")
+    f = joinpath("./src/examples/RL_models_landing_3d/", "vtol_ppo_2_10000000.bson")
     @load f model
     return model
 end
@@ -485,13 +492,17 @@ test_env = VtolEnv(;name = "testVTOL", visualization = true, realtime = true);
 # model = Flux.gpu(model)
 # agent.policy.approximator = model
 
-eval_mode = false
+eval_mode = true
+plotting_position_errors = []
+plotting_rotation_errors = []
+plotting_actions = []
+plotting_return = []
 
 if eval_mode
     model = loadModel()
     model = Flux.gpu(model)
     agent.policy.approximator = model;
-    for i = 1:10
+    for i = 1:1
         run(
             agent.policy, 
             VtolEnv(;name = "testVTOL", visualization = true, realtime = true), 
@@ -540,4 +551,15 @@ else
             end
         ),
     )
+end
+
+if eval_mode
+    # transpose action logs
+    plotting_actions = [[x[i] for x in plotting_actions] for i in eachindex(plotting_actions[1])]
+    x = range(0, length(plotting_position_errors), length(plotting_position_errors))
+    p_position_errors = plot(x, plotting_position_errors, ylabel="[m]", title="Position Error")
+    p_rotation_errors = plot(x, plotting_rotation_errors.*180/pi, ylabel="[°]", title="Rotation Error")
+    p_actions = plot(x, plotting_actions, title="Actions", label=["thrust_L, thrust_R, flap_L, flap_R"], legend=true)
+    p_rewards = plot(x, plotting_return, xlabel="time step", title="Return")
+    plot(p_position_errors, p_rotation_errors, p_actions, p_rewards, layout=(2,2), legend=false, size=(1200, 500))
 end

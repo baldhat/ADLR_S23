@@ -57,6 +57,8 @@ mutable struct VtolEnv{A,T,ACT,R<:AbstractRNG} <: AbstractEnv # Parametric Const
     target_x::T
     target_y::T
     target_z::T
+
+    Return::T
 end
 
 
@@ -128,7 +130,8 @@ function VtolEnv(;
         0.0, # reward part for fast_rotation
         rand(Uniform(-10, 10)), # target position x
         0.0, # target position y
-        rand(Uniform(5, 10))  # target position z
+        rand(Uniform(5, 10)),  # target position z
+        0.0
     )
     
     RLBase.reset!(environment)
@@ -172,8 +175,10 @@ function computeReward(env::VtolEnv{A,T}) where {A,T}
     env.not_upright_orientation -= not_upright_orientation
     env.not_still -= not_still
     env.fast_rotation -= fast_rotation
+    reward = stay_alive + success_reward + close_to_target - not_upright_orientation - not_still - fast_rotation
+    env.Return += reward
 
-    return stay_alive + success_reward + close_to_target - not_upright_orientation - not_still - fast_rotation
+    return reward
 end
 RLBase.reward(env::VtolEnv{A,T}) where {A,T} = computeReward(env)
 
@@ -201,6 +206,7 @@ function RLBase.reset!(env::VtolEnv{A,T}) where {A,T}
     env.not_upright_orientation = 0.0
     env.not_still = 0.0
     env.fast_rotation = 0.0
+    env.Return = 0.0
     nothing
 end;
 
@@ -251,7 +257,15 @@ function _step!(env::VtolEnv, next_action)
     env.state[8] = env.target_y - env.x_W[2] # relative target position along y
     env.state[9] = env.target_z - env.x_W[3] # relative target position along z
     
-    angle_transformed = env.state[1] + pi/2
+    angle_transformed = (env.state[1] + pi/2) - pi
+
+    x_target = [env.target_x, env.target_y, env.target_z]
+    if eval_mode
+        push!(plotting_position_errors, norm(env.x_W - x_target))
+        push!(plotting_rotation_errors, angle_transformed)
+        push!(plotting_actions, next_action)
+        push!(plotting_return, env.Return)
+    end
     
     # Termination criteria
     env.done =
@@ -263,6 +277,8 @@ function _step!(env::VtolEnv, next_action)
         # rot > pi/2 || # Stop if the drone is pitched 90°.
         env.t > 30 # stop after 30s
     nothing
+
+    
 end;
 
 
@@ -353,12 +369,16 @@ test_env = VtolEnv(;name = "testVTOL", visualization = true, realtime = true);
 
 
 eval_mode = true
+plotting_position_errors = []
+plotting_rotation_errors = []
+plotting_actions = []
+plotting_return = []
 
 if eval_mode
     model = loadModel()
     model = Flux.gpu(model)
     agent.policy.approximator = model;
-    for i = 1:10
+    for i = 1:1
         run(
             agent.policy, 
             VtolEnv(;name = "testVTOL", visualization = true, realtime = true), 
@@ -389,4 +409,15 @@ else
             end
         ),
     )
+end
+
+if eval_mode
+    # transpose action logs
+    plotting_actions = [[x[i] for x in plotting_actions] for i in eachindex(plotting_actions[1])]
+    x = range(0, length(plotting_position_errors), length(plotting_position_errors))
+    p_position_errors = plot(x, plotting_position_errors, ylabel="[m]", title="Position Error")
+    p_rotation_errors = plot(x, plotting_rotation_errors.*180/pi, ylabel="[°]", title="Rotation Error")
+    p_actions = plot(x, plotting_actions, title="Actions", label=["thrust_L, thrust_R, flap_L, flap_R"], legend=true)
+    p_rewards = plot(x, plotting_return, xlabel="time step", title="Return")
+    plot(p_position_errors, p_rotation_errors, p_actions, p_rewards, layout=(2,2), legend=false, size=(1200, 500))
 end
