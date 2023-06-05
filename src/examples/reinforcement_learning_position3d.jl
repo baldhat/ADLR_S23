@@ -506,9 +506,9 @@ if eval_mode
     # transpose action logs
     plotting_actions = [[x[i] for x in plotting_actions] for i in eachindex(plotting_actions[1])]
     x = range(0, length(plotting_position_errors), length(plotting_position_errors))
-    p_position_errors = plot(x, plotting_position_errors, ylabel="[m]", title="Position Error")
-    p_rotation_errors = plot(x, plotting_rotation_errors.*180/pi, ylabel="[°]", title="Rotation Error")
+    p_position_errors = plot(x, plotting_position_errors, title="Position Error [m]")
+    p_rotation_errors = plot(x, plotting_rotation_errors.*180/pi, title="Rotation Error [°]")
     p_actions = plot(x, plotting_actions, title="Actions", label=["thrust_L, thrust_R, flap_L, flap_R"], legend=true)
-    p_rewards = plot(x, plotting_return, xlabel="time step", title="Return")
-    plot(p_position_errors, p_rotation_errors, p_actions, p_rewards, layout=(2,2), legend=false)
+    p_rewards = plot(x, plotting_return, title="Return")
+    plot(p_position_errors, p_rotation_errors, p_actions, p_rewards, size=(1500,500), layout=(2,2), legend=false)
 end
