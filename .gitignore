@@ -8,3 +8,4 @@ logs/*
 .vscode/*
 src/examples/RL_models_landing_3d/*
 Project.toml
+src/examples/RL_models/.DS_Store
