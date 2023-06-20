@@ -139,7 +139,15 @@ RLBase.state(env::VtolEnv) = env.state
 function computeReward(env::VtolEnv{A,T}) where {A,T}
     # constants and functions for tuning
     APPROACH_RADIUS = 5 # radius where the drone should transition to hovering
-    weighting_fun = (x, r) -> (1 - (abs(x / r)) ^ 0.4)
+    L = 100 # weighting function is smoothed at r/l with a parabola
+    weighting_fun_raw = (x, r) -> (1 - (abs(x / r)) ^ 0.4)
+    weighting_fun = (x, r) ->   if x < -r/L 
+                                    weighting_fun_raw(x, r) 
+                                elseif x > r/L 
+                                    weighting_fun_raw(x, r) 
+                                else 
+                                    -0.2*x^2*L^1.6/r^2 + 1 - 1/L^0.4 + 0.2*L^1.6/L^2
+                                end
     masking_fun = (x, r) -> (max(0, weighting_fun(x, r)))
 
     stay_alive = 0.05
@@ -157,7 +165,7 @@ function computeReward(env::VtolEnv{A,T}) where {A,T}
     cylinder_radius = 0.5
     cylinder_height = 3.0
     angle_radius = 0.5 # allowed deviation from target angle (= 0.0)
-    target_descend_rate = -0.2
+    target_descend_rate = -0.3
     descend_rate_radius = 0.1 # allowed deviation from target descend rate
     elevation_radius = 0.05 # once being this close to the ground, the drone is considered having landed
     # drone is inside cylinder
@@ -173,7 +181,7 @@ function computeReward(env::VtolEnv{A,T}) where {A,T}
         # reward having the right descend rate
         if abs(delta_angle) < angle_radius
             delta_descend_rate = env.state[6] - target_descend_rate
-            success_reward += masking_fun(delta_descend_rate, descend_rate_radius) * 0.5
+            success_reward += masking_fun(delta_descend_rate, descend_rate_radius) * 0.4
             # reward being close to the ground
             if abs(delta_descend_rate) < descend_rate_radius
                 elevation = env.state[4]
