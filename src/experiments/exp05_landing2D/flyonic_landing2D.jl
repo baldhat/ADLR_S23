@@ -47,6 +47,9 @@ mutable struct VtolEnv{A,T,ACT,R<:AbstractRNG} <: AbstractEnv # Parametric Const
 
     target::Vector{T}
 
+    last_action::Vector{T} # for exponential discount factor
+    gamma::T # exponential discount factor
+
     stay_alive::T
     distance_reward::T
     success_reward::T
@@ -115,7 +118,11 @@ function VtolEnv(;
         zeros(T, 3), # ω_B
         zeros(T, 3), # wind_W
         T(0.01), # Δt  
+
         [0.0; 0.5],# target position
+        zeros(T, 4), # last action
+        0.0, # gamma
+
         0.0, # reward part for stay_alive
         0.0, # penalty part for distance
         0.0, # reward part for success
@@ -139,7 +146,7 @@ RLBase.state(env::VtolEnv) = env.state
 function computeReward(env::VtolEnv{A,T}) where {A,T}
     # constants and functions for tuning
     APPROACH_RADIUS = 5 # radius where the drone should transition to hovering
-    L = 100 # weighting function is smoothed at r/l with a parabola
+    L = 10 # weighting function is smoothed at r/l with a parabola
     weighting_fun_raw = (x, r) -> (1 - (abs(x / r)) ^ 0.4)
     weighting_fun = (x, r) ->   if x < -r/L 
                                     weighting_fun_raw(x, r) 
@@ -151,6 +158,7 @@ function computeReward(env::VtolEnv{A,T}) where {A,T}
     masking_fun = (x, r) -> (max(0, weighting_fun(x, r)))
 
     stay_alive = 0.05
+    
     delta_angle = env.state[1] - pi/2
     if delta_angle > pi
         delta_angle -= pi
@@ -168,10 +176,11 @@ function computeReward(env::VtolEnv{A,T}) where {A,T}
     target_descend_rate = -0.3
     descend_rate_radius = 0.1 # allowed deviation from target descend rate
     elevation_radius = 0.05 # once being this close to the ground, the drone is considered having landed
+    
     # drone is inside cylinder
     delta_height = env.state[4] - env.state[8]
     delta_radius = norm(env.state[3:3] - env.state[7:7])
-    # reward being inside landing cylinder
+    # reward being inside landing cylifnder
     if (0.0 < delta_height && delta_height < cylinder_height) 
         success_reward += masking_fun(delta_radius, cylinder_radius) * 0.2
     end
@@ -181,7 +190,7 @@ function computeReward(env::VtolEnv{A,T}) where {A,T}
         # reward having the right descend rate
         if abs(delta_angle) < angle_radius
             delta_descend_rate = env.state[6] - target_descend_rate
-            success_reward += masking_fun(delta_descend_rate, descend_rate_radius) * 0.4
+            success_reward += masking_fun(delta_descend_rate, descend_rate_radius) * 0.5
             # reward being close to the ground
             if abs(delta_descend_rate) < descend_rate_radius
                 elevation = env.state[4]
@@ -242,7 +251,8 @@ function (env::VtolEnv)(a)
                    max(range(env.action_space[1])[1], min(range(env.action_space[1])[end],  a[1])),
                    max(range(env.action_space[2])[1], min(range(env.action_space[2])[end],  a[2])),
                    max(range(env.action_space[2])[1], min(range(env.action_space[2])[end],  a[2]))]
-
+    next_action = env.last_action .* env.gamma + next_action .* (1 - env.gamma)
+    env.last_action = next_action
     _step!(env, next_action)
 end
 
@@ -365,7 +375,7 @@ end
 
 
 function loadModel()
-    f = joinpath("S:/Lenny/.UNI/RCI Sem 3/ADL4R/ADLR_S23/src/experiments/exp05_landing2D/runs/vtol_ppo_2_6000000.bson")
+    f = joinpath("S:/Lenny/.UNI/RCI Sem 3/ADL4R/ADLR_S23/src/experiments/exp05_landing2D/flyonic_landing2D_chkpt_shaped-smooth.bson")
     @load f model
     return model
 end
@@ -374,7 +384,6 @@ function validate_policy(t, agent, env)
     run(agent.policy, test_env, StopAfterEpisode(1), episode_test_reward_hook)
     # the result of the hook
     println("\nTest reward at step $t: $(episode_test_reward_hook.rewards[end])")
-    println(test_env.state[1] - pi/2)
     
 end;
 
@@ -384,7 +393,7 @@ test_env = VtolEnv(;name = "testVTOL", visualization = true, realtime = true);
 
 # agent.policy.approximator = loadModel();
 
-eval_mode = false
+eval_mode = true
 plotting_position_errors = []
 plotting_rotation_errors = []
 plotting_actions = []
@@ -398,7 +407,7 @@ if eval_mode
         run(
             agent.policy, 
             VtolEnv(;name = "evalVTOL", visualization = true, realtime = true), 
-            StopAfterEpisode(5), 
+            StopAfterEpisode(1), 
             episode_test_reward_hook
         )
     end
