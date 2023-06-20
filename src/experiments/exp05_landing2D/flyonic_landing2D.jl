@@ -50,9 +50,13 @@ mutable struct VtolEnv{A,T,ACT,R<:AbstractRNG} <: AbstractEnv # Parametric Const
     last_action::Vector{T} # for exponential discount factor
     gamma::T # exponential discount factor
 
+    action_penalty::T
     stay_alive::T
     distance_reward::T
-    success_reward::T
+    inside_cylinder_reward::T
+    upright_reward::T
+    slow_descend_reward::T
+    landed_reward::T
     Return::T
 end
 
@@ -83,16 +87,16 @@ function VtolEnv(;
     
     state_space = Space( # Three continuous values in state space.
         ClosedInterval{T}[
-            typemin(T)..typemax(T), # rotation arround y
+            typemin(T)..typemax(T), # delta_rotation
             typemin(T)..typemax(T), # rotation velocity arround y
-            typemin(T)..typemax(T), # world position along x
-            typemin(T)..typemax(T), # world position along z
+            typemin(T)..typemax(T), # delta world position along x to target
+            typemin(T)..typemax(T), # delta world position along z to target
             typemin(T)..typemax(T), # world velocity along x
             typemin(T)..typemax(T), # world velocity along z
             typemin(T)..typemax(T), # target position along x
             typemin(T)..typemax(T), # target_position along z
-            typemin(T)..typemax(T), # last action thrust
-            typemin(T)..typemax(T), # last action flaps
+            typemin(T)..typemax(T), # last raw action thrust
+            typemin(T)..typemax(T), # last raw action flaps
             ], 
     )
     
@@ -125,9 +129,13 @@ function VtolEnv(;
         zeros(T, 4), # last action
         0.5, # gamma
 
+        0.0, # reward part for action penalty
         0.0, # reward part for stay_alive
         0.0, # penalty part for distance
         0.0, # reward part for success
+        0.0, # reward part for upright
+        0.0, # reward part for slow descend
+        0.0, # reward part for landed
         0.0 # Return
     )
     
@@ -171,7 +179,6 @@ function computeReward(env::VtolEnv{A,T}) where {A,T}
     distance_reward = weighting_fun(norm(env.state[3:4] - env.state[7:8]), APPROACH_RADIUS) * 0.2
 
     # model of the landing procedure
-    success_reward = 0.0
     cylinder_radius = 0.5
     cylinder_height = 3.0
     angle_radius = 0.5 # allowed deviation from target angle (= 0.0)
@@ -182,22 +189,30 @@ function computeReward(env::VtolEnv{A,T}) where {A,T}
     # drone is inside cylinder
     delta_height = env.state[4] - env.state[8]
     delta_radius = norm(env.state[3:3] - env.state[7:7])
+
+
+    action_penalty = sum(abs.(env.state[9:10])) * 0.0
+    inside_cylinder_reward = 0.0
+    upright_reward = 0.0
+    slow_descend_reward = 0.0
+    landed_reward = 0.0
+
     # reward being inside landing cylifnder
     if (0.0 < delta_height && delta_height < cylinder_height) 
-        success_reward += masking_fun(delta_radius, cylinder_radius) * 0.2
+        inside_cylinder_reward = masking_fun(delta_radius, cylinder_radius) * 0.2
     end
     # reward being upright
     if delta_height < cylinder_height && delta_radius < cylinder_radius
-        success_reward += masking_fun(delta_angle, angle_radius) * 0.3
+        upright_reward = masking_fun(delta_angle, angle_radius) * 0.3
         # reward having the right descend rate
         if abs(delta_angle) < angle_radius
             delta_descend_rate = env.state[6] - target_descend_rate
-            success_reward += masking_fun(delta_descend_rate, descend_rate_radius) * 0.5
+            slow_descend_reward = masking_fun(delta_descend_rate, descend_rate_radius) * 0.5
             # reward being close to the ground
             if abs(delta_descend_rate) < descend_rate_radius
                 elevation = env.state[4]
-                if elevation < elevation_radius
-                    success_reward += 20.0
+                landed_reward = masking_fun(elevation, elevation_radius) * 20.0
+                if elevation < 0.1 * elevation_radius
                     env.done = true
                 end
             end
@@ -206,8 +221,11 @@ function computeReward(env::VtolEnv{A,T}) where {A,T}
 
     env.stay_alive += stay_alive
     env.distance_reward += distance_reward
-    env.success_reward += success_reward
-    reward = stay_alive + distance_reward + success_reward
+    env.upright_reward += upright_reward
+    env.slow_descend_reward += slow_descend_reward
+    env.landed_reward += landed_reward
+    env.action_penalty -= action_penalty
+    reward = stay_alive + distance_reward+ upright_reward + slow_descend_reward + landed_reward - action_penalty
     env.Return += reward
     
     return reward
@@ -232,13 +250,17 @@ function RLBase.reset!(env::VtolEnv{A,T}) where {A,T}
 
     env.stay_alive = 0.0
     env.distance_reward = 0.0
-    env.success_reward = 0.0
+    env.upright_reward = 0.0
+    env.slow_descend_reward = 0.0
+    env.landed_reward = 0.0
+    env.action_penalty = 0.0
+    env.Return = 0.0
 
     env.target = [0.0; 0.5]
  
     env.state = [Rotations.params(RotYXZ(env.R_W))[1]; env.ω_B[2]; env.x_W[1]; env.x_W[3]; v_W[1]; v_W[3]; env.target[1]; env.target[2]; 0; 0]
     env.t = 0.0
-    env.action = [0.0]
+    env.action = [0.0, 0.0]
     env.done = false
     nothing
 end;
@@ -247,14 +269,19 @@ end;
 # defines a methods for a callable object.
 # So when a VtolEnv object is created, it has this method that can be called
 function (env::VtolEnv)(a)
-
-    # set the propeller trust and the two flaps 2D case
-    next_action = [max(range(env.action_space[1])[1], min(range(env.action_space[1])[end],  a[1])), 
-                   max(range(env.action_space[1])[1], min(range(env.action_space[1])[end],  a[1])),
-                   max(range(env.action_space[2])[1], min(range(env.action_space[2])[end],  a[2])),
-                   max(range(env.action_space[2])[1], min(range(env.action_space[2])[end],  a[2]))]
-    next_action = env.state[9:10] .* env.gamma + next_action .* (1 - env.gamma)
-    env.state[9:10] = next_action
+    raw_action = a
+    # set the propeller trust and the two flaps 2D case considering bounds
+    next_action = [max(range(env.action_space[1])[1], min(a[1]), range(env.action_space[1])[end]), 
+                   max(range(env.action_space[1])[1], min(a[1]), range(env.action_space[1])[end]),
+                   max(range(env.action_space[2])[1], min(a[2]), range(env.action_space[2])[end]),
+                   max(range(env.action_space[2])[1], min(a[2]), range(env.action_space[2])[end])]
+    # inflate last action for 2D case considering bounds
+    last_action = [max(range(env.action_space[1])[1], min(env.state[9]), range(env.action_space[1])[end]), 
+                   max(range(env.action_space[1])[1], min(env.state[9]), range(env.action_space[1])[end]),
+                   max(range(env.action_space[2])[1], min(env.state[10]), range(env.action_space[2])[end]),
+                   max(range(env.action_space[2])[1], min(env.state[10]), range(env.action_space[2])[end])]
+    next_action = last_action .* env.gamma + next_action .* (1 - env.gamma) # exponentail moving average
+    env.state[9:10] = raw_action # new last raw action
     _step!(env, next_action)
 end
 
@@ -396,7 +423,7 @@ test_env = VtolEnv(;name = "testVTOL", visualization = true, realtime = true);
 
 # agent.policy.approximator = loadModel();
 
-eval_mode = true
+eval_mode = false
 plotting_position_errors = []
 plotting_rotation_errors = []
 plotting_actions = []
@@ -424,13 +451,14 @@ else
             DoEveryNStep(validate_policy, n=50_000),
             DoEveryNStep(n=3_000) do  t, agent, env
                 Base.with_logger(logger) do
-                    stay_alive = mean([sub_env.stay_alive for sub_env in env])
-                    distance_reward = mean([sub_env.distance_reward for sub_env in env])
-                    success_reward = mean([sub_env.success_reward for sub_env in env])
-                    @info "reward" stay_alive = stay_alive
-                    @info "reward" distance_reward = distance_reward
-                    @info "reward" success_reward = success_reward
-                    @info "reward" total = stay_alive + distance_reward + success_reward
+                    @info "reward" action_penalty = mean([sub_env.action_penalty for sub_env in env])
+                    @info "reward" stay_alive = mean([sub_env.stay_alive for sub_env in env])
+                    @info "reward" distance_reward = mean([sub_env.distance_reward for sub_env in env])
+                    @info "reward" inside_cylinder_reward = mean([sub_env.inside_cylinder_reward for sub_env in env])
+                    @info "reward" upright_reward = mean([sub_env.upright_reward for sub_env in env])
+                    @info "reward" slow_descend_reward = mean([sub_env.slow_descend_reward for sub_env in env])
+                    @info "reward" landed_reward = mean([sub_env.landed_reward for sub_env in env])
+                    @info "reward" Return = mean([sub_env.Return for sub_env in env])
                 end
             end
         ),
