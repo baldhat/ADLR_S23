@@ -152,6 +152,7 @@ function computeReward(env::VtolEnv{A,T}) where {A,T}
 
     distance_reward = weighting_fun(norm(env.state[3:4] - env.state[7:8]), APPROACH_RADIUS) * 0.2
 
+    # model of the landing procedure
     success_reward = 0.0
     cylinder_radius = 0.5
     cylinder_height = 3.0
@@ -162,18 +163,22 @@ function computeReward(env::VtolEnv{A,T}) where {A,T}
     # drone is inside cylinder
     delta_height = env.state[4] - env.state[8]
     delta_radius = norm(env.state[3:3] - env.state[7:7])
+    # reward being inside landing cylinder
     if (0.0 < delta_height && delta_height < cylinder_height) 
-        success_reward += masking_fun(delta_radius, cylinder_radius) * 0.1
+        success_reward += masking_fun(delta_radius, cylinder_radius) * 0.2
     end
+    # reward being upright
     if delta_height < cylinder_height && delta_radius < cylinder_radius
-        success_reward += masking_fun(delta_angle, angle_radius) * 0.2
+        success_reward += masking_fun(delta_angle, angle_radius) * 0.3
+        # reward having the right descend rate
         if abs(delta_angle) < angle_radius
             delta_descend_rate = env.state[6] - target_descend_rate
             success_reward += masking_fun(delta_descend_rate, descend_rate_radius) * 0.5
+            # reward being close to the ground
             if abs(delta_descend_rate) < descend_rate_radius
                 elevation = env.state[4]
                 if elevation < elevation_radius
-                    success_reward += 10
+                    success_reward += 20.0
                     env.done = true
                 end
             end
@@ -279,6 +284,7 @@ function _step!(env::VtolEnv, next_action)
 
     # Termination criteria
     env.done =
+        env.state[4] < 0.0 || # crashed
         env.t > 15 # stop after 15 seconds
     nothing
 end;
@@ -370,7 +376,7 @@ test_env = VtolEnv(;name = "testVTOL", visualization = true, realtime = true);
 
 # agent.policy.approximator = loadModel();
 
-eval_mode = true
+eval_mode = false
 plotting_position_errors = []
 plotting_rotation_errors = []
 plotting_actions = []
