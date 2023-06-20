@@ -14,12 +14,13 @@ using Distributions;
 
 using Plots;
 using Statistics;
+using CUDA;
 
 using TensorBoardLogger
 using Logging
 using BSON: @save, @load # save mode
 
-logger = TBLogger("logs/landing", tb_increment)
+logger = TBLogger("logs/landing2d/landing", tb_increment)
 
 Flyonic.Visualization.create_visualization();
 
@@ -47,8 +48,9 @@ mutable struct VtolEnv{A,T,ACT,R<:AbstractRNG} <: AbstractEnv # Parametric Const
     target::Vector{T}
 
     stay_alive::T
-    distance_penalty::T
+    distance_reward::T
     success_reward::T
+    Return::T
 end
 
 
@@ -116,7 +118,8 @@ function VtolEnv(;
         [0.0; 0.5],# target position
         0.0, # reward part for stay_alive
         0.0, # penalty part for distance
-        0.0 # reward part for success
+        0.0, # reward part for success
+        0.0 # Return
     )
     
     RLBase.reset!(environment)
@@ -134,33 +137,56 @@ RLBase.state(env::VtolEnv) = env.state
 
 
 function computeReward(env::VtolEnv{A,T}) where {A,T}
-    
-    stay_alive = 1.0
-    angle_transformed = env.state[1] - pi/2
-    if angle_transformed > pi
-        angle_transformed -= pi
-    elseif angle_transformed < -pi
-        angle_transformed += pi
+    # constants and functions for tuning
+    APPROACH_RADIUS = 5 # radius where the drone should transition to hovering
+    weighting_fun = (x, r) -> (1 - (abs(x / r)) ^ 0.4)
+    masking_fun = (x, r) -> (max(0, weighting_fun(x, r)))
+
+    stay_alive = 0.05
+    delta_angle = env.state[1] - pi/2
+    if delta_angle > pi
+        delta_angle -= pi
+    elseif delta_angle < -pi
+        delta_angle += pi
     end
 
-    distance_penalty = -(abs(env.state[7] - env.state[3]) + abs(env.state[8] - env.state[4])) * 0.1
+    distance_reward = weighting_fun(norm(env.state[3:4] - env.state[7:8]), APPROACH_RADIUS) * 0.2
 
     success_reward = 0.0
-    if abs(env.state[3] - env.state[7]) < 0.5 && (env.state[8] - env.state[4]) < 3  # cylinder with height 3 and diameter 1
-        success_reward += 1
-        if abs(angle_transformed) < 0.5
-            success_reward += 5
-            if env.state[6] < 0 && env.state[6] > -0.3
-                success_reward += 10
+    cylinder_radius = 0.5
+    cylinder_height = 3.0
+    angle_radius = 0.5 # allowed deviation from target angle (= 0.0)
+    target_descend_rate = -0.2
+    descend_rate_radius = 0.1 # allowed deviation from target descend rate
+    elevation_radius = 0.05 # once being this close to the ground, the drone is considered having landed
+    # drone is inside cylinder
+    delta_height = env.state[4] - env.state[8]
+    delta_radius = norm(env.state[3:3] - env.state[7:7])
+    if (0.0 < delta_height && delta_height < cylinder_height) 
+        success_reward += masking_fun(delta_radius, cylinder_radius) * 0.1
+    end
+    if delta_height < cylinder_height && delta_radius < cylinder_radius
+        success_reward += masking_fun(delta_angle, angle_radius) * 0.2
+        if abs(delta_angle) < angle_radius
+            delta_descend_rate = env.state[6] - target_descend_rate
+            success_reward += masking_fun(delta_descend_rate, descend_rate_radius) * 0.5
+            if abs(delta_descend_rate) < descend_rate_radius
+                elevation = env.state[4]
+                if elevation < elevation_radius
+                    success_reward += 10
+                    env.done = true
+                end
             end
         end
     end
 
     env.stay_alive += stay_alive
-    env.distance_penalty += distance_penalty
+    env.distance_reward += distance_reward
     env.success_reward += success_reward
+    reward = stay_alive + distance_reward + success_reward
+    env.Return += reward
     
-    return stay_alive + distance_penalty + success_reward
+    return reward
 end
 
 RLBase.reward(env::VtolEnv{A,T}) where {A,T} = computeReward(env)
@@ -181,7 +207,7 @@ function RLBase.reset!(env::VtolEnv{A,T}) where {A,T}
     v_W = env.R_W * env.v_B
 
     env.stay_alive = 0.0
-    env.distance_penalty = 0.0
+    env.distance_reward = 0.0
     env.success_reward = 0.0
 
     env.target = [0.0; 0.5]
@@ -199,8 +225,11 @@ end;
 function (env::VtolEnv)(a)
 
     # set the propeller trust and the two flaps 2D case
-    next_action = [a[1], a[1], a[2], a[2]]
-   
+    next_action = [max(range(env.action_space[1])[1], min(range(env.action_space[1])[end],  a[1])), 
+                   max(range(env.action_space[1])[1], min(range(env.action_space[1])[end],  a[1])),
+                   max(range(env.action_space[2])[1], min(range(env.action_space[2])[end],  a[2])),
+                   max(range(env.action_space[2])[1], min(range(env.action_space[2])[end],  a[2]))]
+
     _step!(env, next_action)
 end
 
@@ -241,14 +270,16 @@ function _step!(env::VtolEnv, next_action)
     env.state[7] = env.target[1]
     env.state[8] = env.target[2]
     
-    
+    if eval_mode
+        push!(plotting_position_errors, norm(env.state[3:4] - env.state[7:8]))	
+        push!(plotting_rotation_errors, rot)
+        push!(plotting_actions, next_action)
+        push!(plotting_return, env.Return)
+    end
+
     # Termination criteria
     env.done =
-        #norm(v_B) > 2.0 || # stop if body is to fast
-        env.x_W[3] < 0.0 || # stop if body is below -1m
-        # -pi > rot || # Stop if the drone is pitched 90°.
-        # rot > pi/2 || # Stop if the drone is pitched 90°.
-        env.t > 15 # stop after 20s
+        env.t > 15 # stop after 15 seconds
     nothing
 end;
 
@@ -320,7 +351,7 @@ end
 
 
 function loadModel()
-    f = joinpath("./src/experiments/exp05_landing2D/runs/", "vtol_ppo_2_200000.bson")
+    f = joinpath("S:/Lenny/.UNI/RCI Sem 3/ADL4R/ADLR_S23/src/experiments/exp05_landing2D/runs/vtol_ppo_2_6000000.bson")
     @load f model
     return model
 end
@@ -339,23 +370,54 @@ test_env = VtolEnv(;name = "testVTOL", visualization = true, realtime = true);
 
 # agent.policy.approximator = loadModel();
 
-run(
-    agent,
-    env,
-    StopAfterStep(30_000_000),
-    ComposedHook(
-        DoEveryNStep(saveModel, n=500_000), 
-        DoEveryNStep(validate_policy, n=50_000),
-        DoEveryNStep(n=3_000) do  t, agent, env
-            Base.with_logger(logger) do
-                stay_alive = mean([sub_env.stay_alive for sub_env in env])
-                distance_penalty = mean([sub_env.distance_penalty for sub_env in env])
-                success_reward = mean([sub_env.success_reward for sub_env in env])
-                @info "reward" stay_alive = stay_alive
-                @info "reward" distance_penalty = distance_penalty
-                @info "reward" success_reward = success_reward
-                @info "reward" total = stay_alive - distance_penalty + success_reward
+eval_mode = true
+plotting_position_errors = []
+plotting_rotation_errors = []
+plotting_actions = []
+plotting_return = []
+
+if eval_mode
+    model = loadModel()
+    model = Flux.gpu(model)
+    agent.policy.approximator = model;
+    for i = 1:1
+        run(
+            agent.policy, 
+            VtolEnv(;name = "evalVTOL", visualization = true, realtime = true), 
+            StopAfterEpisode(5), 
+            episode_test_reward_hook
+        )
+    end
+else
+    run(
+        agent,
+        env,
+        StopAfterStep(30_000_000),
+        ComposedHook(
+            DoEveryNStep(saveModel, n=500_000), 
+            DoEveryNStep(validate_policy, n=50_000),
+            DoEveryNStep(n=3_000) do  t, agent, env
+                Base.with_logger(logger) do
+                    stay_alive = mean([sub_env.stay_alive for sub_env in env])
+                    distance_reward = mean([sub_env.distance_reward for sub_env in env])
+                    success_reward = mean([sub_env.success_reward for sub_env in env])
+                    @info "reward" stay_alive = stay_alive
+                    @info "reward" distance_reward = distance_reward
+                    @info "reward" success_reward = success_reward
+                    @info "reward" total = stay_alive + distance_reward + success_reward
+                end
             end
-        end
-    ),
-)
+        ),
+    )
+end
+
+if eval_mode
+    # transpose action logs
+    plotting_actions = [[x[i] for x in plotting_actions] for i in eachindex(plotting_actions[1])]
+    x = range(0, length(plotting_position_errors), length(plotting_position_errors))
+    p_position_errors = plot(x, plotting_position_errors, ylabel="[m]", title="Position Error")
+    p_rotation_errors = plot(x, plotting_rotation_errors.*180/pi, ylabel="[°]", title="Rotation Error")
+    p_actions = plot(x, plotting_actions, title="Actions", label=["thrust_L, thrust_R, flap_L, flap_R"], legend=true)
+    p_rewards = plot(x, plotting_return, xlabel="time step", title="Return")
+    plot(p_position_errors, p_rotation_errors, p_actions, p_rewards, layout=(2,2), legend=false, size=(1200, 500))
+end
