@@ -91,6 +91,8 @@ function VtolEnv(;
             typemin(T)..typemax(T), # world velocity along z
             typemin(T)..typemax(T), # target position along x
             typemin(T)..typemax(T), # target_position along z
+            typemin(T)..typemax(T), # last action thrust
+            typemin(T)..typemax(T), # last action flaps
             ], 
     )
     
@@ -104,7 +106,7 @@ function VtolEnv(;
     environment = VtolEnv(
         action_space,
         state_space,
-        zeros(T, 8), # current state, needs to be extended.
+        zeros(T, 10), # current state, needs to be extended.
         rand(action_space),
         false, # episode done ?
         0.0, # time
@@ -121,7 +123,7 @@ function VtolEnv(;
 
         [0.0; 0.5],# target position
         zeros(T, 4), # last action
-        0.0, # gamma
+        0.5, # gamma
 
         0.0, # reward part for stay_alive
         0.0, # penalty part for distance
@@ -158,7 +160,7 @@ function computeReward(env::VtolEnv{A,T}) where {A,T}
     masking_fun = (x, r) -> (max(0, weighting_fun(x, r)))
 
     stay_alive = 0.05
-    
+
     delta_angle = env.state[1] - pi/2
     if delta_angle > pi
         delta_angle -= pi
@@ -234,7 +236,7 @@ function RLBase.reset!(env::VtolEnv{A,T}) where {A,T}
 
     env.target = [0.0; 0.5]
  
-    env.state = [Rotations.params(RotYXZ(env.R_W))[1]; env.ω_B[2]; env.x_W[1]; env.x_W[3]; v_W[1]; v_W[3]; env.target[1]; env.target[2]]
+    env.state = [Rotations.params(RotYXZ(env.R_W))[1]; env.ω_B[2]; env.x_W[1]; env.x_W[3]; v_W[1]; v_W[3]; env.target[1]; env.target[2]; 0; 0]
     env.t = 0.0
     env.action = [0.0]
     env.done = false
@@ -251,8 +253,8 @@ function (env::VtolEnv)(a)
                    max(range(env.action_space[1])[1], min(range(env.action_space[1])[end],  a[1])),
                    max(range(env.action_space[2])[1], min(range(env.action_space[2])[end],  a[2])),
                    max(range(env.action_space[2])[1], min(range(env.action_space[2])[end],  a[2]))]
-    next_action = env.last_action .* env.gamma + next_action .* (1 - env.gamma)
-    env.last_action = next_action
+    next_action = env.state[9:10] .* env.gamma + next_action .* (1 - env.gamma)
+    env.state[9:10] = next_action
     _step!(env, next_action)
 end
 
@@ -334,6 +336,7 @@ approximator = ActorCritic(
         ),
         μ = Chain(Dense(16, na; initW = glorot_uniform(rng))),
         logσ = Chain(Dense(16, na; initW = glorot_uniform(rng))),
+        max_σ = Float32(1_000_000.0)
     ),
     critic = Chain(
         Dense(ns, 16, relu; initW = glorot_uniform(rng)),
@@ -375,7 +378,7 @@ end
 
 
 function loadModel()
-    f = joinpath("S:/Lenny/.UNI/RCI Sem 3/ADL4R/ADLR_S23/src/experiments/exp05_landing2D/flyonic_landing2D_chkpt_shaped-smooth.bson")
+    f = joinpath("./src/experiments/exp05_landing2D/flyonic_landing2D_chkpt_shaped-smooth_exponential.bson")
     @load f model
     return model
 end
