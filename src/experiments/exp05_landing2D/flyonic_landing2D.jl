@@ -95,8 +95,6 @@ function VtolEnv(;
             typemin(T)..typemax(T), # world velocity along z
             typemin(T)..typemax(T), # target position along x
             typemin(T)..typemax(T), # target_position along z
-            typemin(T)..typemax(T), # last raw action thrust
-            typemin(T)..typemax(T), # last raw action flaps
             ], 
     )
     
@@ -110,7 +108,7 @@ function VtolEnv(;
     environment = VtolEnv(
         action_space,
         state_space,
-        zeros(T, 10), # current state, needs to be extended.
+        zeros(T, 8), # current state, needs to be extended.
         rand(action_space),
         false, # episode done ?
         0.0, # time
@@ -127,7 +125,7 @@ function VtolEnv(;
 
         [0.0; 0.5],# target position
         zeros(T, 4), # last action
-        0.5, # gamma
+        0.0, # gamma
 
         0.0, # reward part for action penalty
         0.0, # reward part for stay_alive
@@ -156,7 +154,7 @@ RLBase.state(env::VtolEnv) = env.state
 function computeReward(env::VtolEnv{A,T}) where {A,T}
     # constants and functions for tuning
     APPROACH_RADIUS = 5 # radius where the drone should transition to hovering
-    L = 10 # weighting function is smoothed at r/l with a parabola
+    L = 100 # weighting function is smoothed at r/l with a parabola
     weighting_fun_raw = (x, r) -> (1 - (abs(x / r)) ^ 0.4)
     weighting_fun = (x, r) ->   if x < -r/L 
                                     weighting_fun_raw(x, r) 
@@ -191,7 +189,6 @@ function computeReward(env::VtolEnv{A,T}) where {A,T}
     delta_radius = norm(env.state[3:3] - env.state[7:7])
 
 
-    action_penalty = sum(abs.(env.state[9:10])) * 0.0
     inside_cylinder_reward = 0.0
     upright_reward = 0.0
     slow_descend_reward = 0.0
@@ -199,19 +196,19 @@ function computeReward(env::VtolEnv{A,T}) where {A,T}
 
     # reward being inside landing cylifnder
     if (0.0 < delta_height && delta_height < cylinder_height) 
-        inside_cylinder_reward = masking_fun(delta_radius, cylinder_radius) * 0.2
+        inside_cylinder_reward = masking_fun(delta_radius, cylinder_radius) * 0.4
     end
     # reward being upright
     if delta_height < cylinder_height && delta_radius < cylinder_radius
-        upright_reward = masking_fun(delta_angle, angle_radius) * 0.3
+        upright_reward = masking_fun(delta_angle, angle_radius) * 0.4
         # reward having the right descend rate
         if abs(delta_angle) < angle_radius
             delta_descend_rate = env.state[6] - target_descend_rate
-            slow_descend_reward = masking_fun(delta_descend_rate, descend_rate_radius) * 0.5
+            slow_descend_reward = masking_fun(delta_descend_rate, descend_rate_radius) * 1.
             # reward being close to the ground
             if abs(delta_descend_rate) < descend_rate_radius
                 elevation = env.state[4]
-                landed_reward = masking_fun(elevation, elevation_radius) * 20.0
+                landed_reward = masking_fun(elevation, elevation_radius) * 50.0
                 if elevation < 0.1 * elevation_radius
                     env.done = true
                 end
@@ -221,11 +218,11 @@ function computeReward(env::VtolEnv{A,T}) where {A,T}
 
     env.stay_alive += stay_alive
     env.distance_reward += distance_reward
+    env.inside_cylinder_reward += inside_cylinder_reward
     env.upright_reward += upright_reward
     env.slow_descend_reward += slow_descend_reward
     env.landed_reward += landed_reward
-    env.action_penalty -= action_penalty
-    reward = stay_alive + distance_reward+ upright_reward + slow_descend_reward + landed_reward - action_penalty
+    reward = stay_alive + distance_reward + inside_cylinder_reward + upright_reward + slow_descend_reward + landed_reward
     env.Return += reward
     
     return reward
@@ -249,6 +246,7 @@ function RLBase.reset!(env::VtolEnv{A,T}) where {A,T}
     v_W = env.R_W * env.v_B
 
     env.stay_alive = 0.0
+    env.inside_cylinder_reward = 0.0
     env.distance_reward = 0.0
     env.upright_reward = 0.0
     env.slow_descend_reward = 0.0
@@ -258,7 +256,7 @@ function RLBase.reset!(env::VtolEnv{A,T}) where {A,T}
 
     env.target = [0.0; 0.5]
  
-    env.state = [Rotations.params(RotYXZ(env.R_W))[1]; env.ω_B[2]; env.x_W[1]; env.x_W[3]; v_W[1]; v_W[3]; env.target[1]; env.target[2]; 0; 0]
+    env.state = [Rotations.params(RotYXZ(env.R_W))[1]; env.ω_B[2]; env.x_W[1]; env.x_W[3]; v_W[1]; v_W[3]; env.target[1]; env.target[2]]
     env.t = 0.0
     env.action = [0.0, 0.0]
     env.done = false
@@ -269,19 +267,11 @@ end;
 # defines a methods for a callable object.
 # So when a VtolEnv object is created, it has this method that can be called
 function (env::VtolEnv)(a)
-    raw_action = a
     # set the propeller trust and the two flaps 2D case considering bounds
-    next_action = [max(range(env.action_space[1])[1], min(a[1]), range(env.action_space[1])[end]), 
-                   max(range(env.action_space[1])[1], min(a[1]), range(env.action_space[1])[end]),
-                   max(range(env.action_space[2])[1], min(a[2]), range(env.action_space[2])[end]),
-                   max(range(env.action_space[2])[1], min(a[2]), range(env.action_space[2])[end])]
-    # inflate last action for 2D case considering bounds
-    last_action = [max(range(env.action_space[1])[1], min(env.state[9]), range(env.action_space[1])[end]), 
-                   max(range(env.action_space[1])[1], min(env.state[9]), range(env.action_space[1])[end]),
-                   max(range(env.action_space[2])[1], min(env.state[10]), range(env.action_space[2])[end]),
-                   max(range(env.action_space[2])[1], min(env.state[10]), range(env.action_space[2])[end])]
-    next_action = last_action .* env.gamma + next_action .* (1 - env.gamma) # exponentail moving average
-    env.state[9:10] = raw_action # new last raw action
+    next_action = [max(range(env.action_space[1])[1], min(a[1], range(env.action_space[1])[end])), 
+                   max(range(env.action_space[1])[1], min(a[1], range(env.action_space[1])[end])),
+                   max(range(env.action_space[2])[1], min(a[2], range(env.action_space[2])[end])),
+                   max(range(env.action_space[2])[1], min(a[2], range(env.action_space[2])[end]))]
     _step!(env, next_action)
 end
 
@@ -363,7 +353,7 @@ approximator = ActorCritic(
         ),
         μ = Chain(Dense(16, na; initW = glorot_uniform(rng))),
         logσ = Chain(Dense(16, na; initW = glorot_uniform(rng))),
-        max_σ = Float32(1_000_000.0)
+        max_σ = Float32(1_000_000_000.0)
     ),
     critic = Chain(
         Dense(ns, 16, relu; initW = glorot_uniform(rng)),
