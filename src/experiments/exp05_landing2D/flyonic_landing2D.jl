@@ -165,7 +165,7 @@ function computeReward(env::VtolEnv{A,T}) where {A,T}
                                 end
     masking_fun = (x, r) -> (max(0, weighting_fun(x, r)))
 
-    stay_alive = 0.05
+    stay_alive = 0.02
 
     delta_angle = env.state[1] - pi/2
     if delta_angle > pi
@@ -395,7 +395,7 @@ end
 
 
 function loadModel()
-    f = joinpath("./src/experiments/exp05_landing2D/flyonic_landing2D_chkpt_shaped-smooth_exponential.bson")
+    f = joinpath("./src/experiments/exp05_landing2D/runs/vtol_ppo_2_1500000.bson")
     @load f model
     return model
 end
@@ -411,7 +411,7 @@ episode_test_reward_hook = TotalRewardPerEpisode(;is_display_on_exit=false)
 # create a env only for reward test
 test_env = VtolEnv(;name = "testVTOL", visualization = true, realtime = true);
 
-# agent.policy.approximator = loadModel();
+agent.policy.approximator = loadModel()|>gpu;
 
 eval_mode = false
 plotting_position_errors = []
