@@ -131,7 +131,7 @@ function VtolEnv(;
 
         [0.0; 0.5],# target position
         zeros(T, 2), # last action
-        0.8, # gamma
+        0.9, # gamma
 
         0.0, # reward part for action penalty
         0.0, # reward part for stay_alive
@@ -180,7 +180,7 @@ function computeReward(env::VtolEnv{A,T}) where {A,T}
         delta_angle += pi
     end
 
-    distance_reward = weighting_fun(norm(env.state[3:4] - env.state[7:8]), APPROACH_RADIUS) * 0.2
+    distance_reward = weighting_fun(norm(env.state[3:4] - env.state[7:8]), APPROACH_RADIUS) * 0.1
 
     # action rate penalty
     action_rate_penalty = norm(env.action - env.last_action) * 1e-2
@@ -210,15 +210,15 @@ function computeReward(env::VtolEnv{A,T}) where {A,T}
     end
     # reward being upright
     if delta_height < cylinder_height && delta_radius < cylinder_radius
-        upright_reward = masking_fun(delta_angle, angle_radius) * 0.5
+        upright_reward = masking_fun(delta_angle, angle_radius) * 1.0
         # reward having the right descend rate
         if abs(delta_angle) < angle_radius
             delta_descend_rate = env.state[6] - target_descend_rate
-            slow_descend_reward = masking_fun(delta_descend_rate, descend_rate_radius) * 1.0
+            slow_descend_reward = masking_fun(delta_descend_rate, descend_rate_radius) * 0.4
             # reward being close to the ground
             if abs(delta_descend_rate) < descend_rate_radius
                 elevation = env.state[4]
-                landed_reward = masking_fun(elevation, elevation_radius) * 50.0
+                landed_reward = masking_fun(elevation, elevation_radius) * 150.0
                 if elevation < 0.1 * elevation_radius
                     env.done = true
                 end
@@ -407,14 +407,14 @@ agent = Agent( # A wrapper of an AbstractPolicy
 
 function saveModel(t, agent, env)
     model = cpu(agent.policy.approximator)   
-    f = joinpath("./src/experiments/exp05_landing2D/runs/", "vtol_ppo_2_$t.bson")
+    f = joinpath("./src/experiments/exp05_landing2D/runs/", "landing2D_$t.bson")
     @save f model
     println("parameters at step $t saved to $f")
 end
 
 
 function loadModel()
-    f = joinpath("./src/experiments/exp05_landing2D/runs/vtol_ppo_2_1100000.bson")
+    f = joinpath("./src/experiments/exp05_landing2D/landing2D_ar_gamma.bson")
     @load f model
     return model
 end
@@ -457,7 +457,7 @@ if eval_mode
     model = Flux.gpu(model)
     agent.policy.approximator = model;
     
-    for i = 1:1
+    for i = 1:6
         run(
             agent.policy, 
             VtolEnv(;name = "evalVTOL", visualization = true, realtime = true), 
@@ -466,6 +466,18 @@ if eval_mode
         )
     end
 else
+    function RLBase.prob(
+        p::PPOPolicy{<:ActorCritic{<:GaussianNetwork},Normal},
+        state::AbstractArray,
+        mask,
+    )
+        if p.update_step < p.n_random_start
+            @error "todo"
+        else
+            μ, logσ = p.approximator.actor(send_to_device(device(p.approximator), state)) |> send_to_host
+            StructArray{Normal}((μ, exp.(logσ)))
+        end
+    end
     run(
         agent,
         env,
