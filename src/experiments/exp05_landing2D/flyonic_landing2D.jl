@@ -20,7 +20,7 @@ using TensorBoardLogger
 using Logging
 using BSON: @save, @load # save mode
 
-logger = TBLogger("logs/landing2d/landing", tb_increment)
+logger = TBLogger("logs/landing2d/landing_with_arp", tb_increment)
 
 Flyonic.Visualization.create_visualization();
 
@@ -50,7 +50,7 @@ mutable struct VtolEnv{A,T,ACT,R<:AbstractRNG} <: AbstractEnv # Parametric Const
     last_action::Vector{T} # for exponential discount factor
     gamma::T # exponential discount factor
 
-    action_penalty::T
+    action_rate_penalty::T
     stay_alive::T
     distance_reward::T
     inside_cylinder_reward::T
@@ -95,6 +95,8 @@ function VtolEnv(;
             typemin(T)..typemax(T), # world velocity along z
             typemin(T)..typemax(T), # target position along x
             typemin(T)..typemax(T), # target_position along z
+            typemin(T)..typemax(T), # previous thrust output
+            typemin(T)..typemax(T), # previous flaps output
             ], 
     )
     
@@ -124,7 +126,7 @@ function VtolEnv(;
         T(0.01), # Δt  
 
         [0.0; 0.5],# target position
-        zeros(T, 4), # last action
+        zeros(T, 2), # last action
         0.0, # gamma
 
         0.0, # reward part for action penalty
@@ -176,6 +178,10 @@ function computeReward(env::VtolEnv{A,T}) where {A,T}
 
     distance_reward = weighting_fun(norm(env.state[3:4] - env.state[7:8]), APPROACH_RADIUS) * 0.2
 
+    # action rate penalty
+    action_rate_penalty = norm(env.action - env.last_action) * 1e-2
+    env.last_action = env.action # probably there is a better place for this
+
     # model of the landing procedure
     cylinder_radius = 0.5
     cylinder_height = 3.0
@@ -200,11 +206,11 @@ function computeReward(env::VtolEnv{A,T}) where {A,T}
     end
     # reward being upright
     if delta_height < cylinder_height && delta_radius < cylinder_radius
-        upright_reward = masking_fun(delta_angle, angle_radius) * 0.4
+        upright_reward = masking_fun(delta_angle, angle_radius) * 1.
         # reward having the right descend rate
         if abs(delta_angle) < angle_radius
             delta_descend_rate = env.state[6] - target_descend_rate
-            slow_descend_reward = masking_fun(delta_descend_rate, descend_rate_radius) * 1.
+            slow_descend_reward = masking_fun(delta_descend_rate, descend_rate_radius) * 6.
             # reward being close to the ground
             if abs(delta_descend_rate) < descend_rate_radius
                 elevation = env.state[4]
@@ -222,7 +228,8 @@ function computeReward(env::VtolEnv{A,T}) where {A,T}
     env.upright_reward += upright_reward
     env.slow_descend_reward += slow_descend_reward
     env.landed_reward += landed_reward
-    reward = stay_alive + distance_reward + inside_cylinder_reward + upright_reward + slow_descend_reward + landed_reward
+    env.action_rate_penalty -= action_rate_penalty
+    reward = stay_alive + distance_reward + inside_cylinder_reward + upright_reward + slow_descend_reward + landed_reward - action_rate_penalty
     env.Return += reward
     
     return reward
@@ -251,14 +258,15 @@ function RLBase.reset!(env::VtolEnv{A,T}) where {A,T}
     env.upright_reward = 0.0
     env.slow_descend_reward = 0.0
     env.landed_reward = 0.0
-    env.action_penalty = 0.0
+    env.action_rate_penalty = 0.0
+    env.last_action = [1.0; 0.0]
     env.Return = 0.0
 
     env.target = [0.0; 0.5]
  
-    env.state = [Rotations.params(RotYXZ(env.R_W))[1]; env.ω_B[2]; env.x_W[1]; env.x_W[3]; v_W[1]; v_W[3]; env.target[1]; env.target[2]]
+    env.state = [Rotations.params(RotYXZ(env.R_W))[1]; env.ω_B[2]; env.x_W[1]; env.x_W[3]; v_W[1]; v_W[3]; env.target[1]; env.target[2]; env.last_action[1]; env.last_action[2]]
     env.t = 0.0
-    env.action = [0.0, 0.0]
+    env.action = [1.0; 0.0]
     env.done = false
     nothing
 end;
@@ -267,11 +275,13 @@ end;
 # defines a methods for a callable object.
 # So when a VtolEnv object is created, it has this method that can be called
 function (env::VtolEnv)(a)
+    env.action = [a[1], a[2]]
     # set the propeller trust and the two flaps 2D case considering bounds
-    next_action = [max(range(env.action_space[1])[1], min(a[1], range(env.action_space[1])[end])), 
-                   max(range(env.action_space[1])[1], min(a[1], range(env.action_space[1])[end])),
-                   max(range(env.action_space[2])[1], min(a[2], range(env.action_space[2])[end])),
-                   max(range(env.action_space[2])[1], min(a[2], range(env.action_space[2])[end]))]
+    next_action = [a[1] + 1,
+                   a[1] + 1,
+                   a[2],
+                   a[2]]
+    
     _step!(env, next_action)
 end
 
@@ -302,6 +312,7 @@ function _step!(env::VtolEnv, next_action)
     
     # State space
     rot = Rotations.params(RotYXZ(env.R_W))[1]
+    rot_error = rot - pi/2
     env.state[1] = rot # rotation arround y
     env.state[2] = env.ω_B[2] # rotation velocity arround y
     env.state[3] = env.x_W[1] # world position along x
@@ -311,10 +322,11 @@ function _step!(env::VtolEnv, next_action)
     env.state[6] = v_W[3] # velocity along world z
     env.state[7] = env.target[1]
     env.state[8] = env.target[2]
+    env.state[9:10] = env.last_action
     
     if eval_mode
         push!(plotting_position_errors, norm(env.state[3:4] - env.state[7:8]))	
-        push!(plotting_rotation_errors, rot)
+        push!(plotting_rotation_errors, rot_error)
         push!(plotting_actions, next_action)
         push!(plotting_return, env.Return)
     end
@@ -322,13 +334,14 @@ function _step!(env::VtolEnv, next_action)
     # Termination criteria
     env.done =
         env.state[4] < 0.0 || # crashed
-        env.t > 15 # stop after 15 seconds
+        env.t > 15 || # stop after 15 seconds
+        env.done
     nothing
 end;
 
 
 
-seed = 123    
+seed = 111   
 rng = StableRNG(seed)
 N_ENV = 16
 UPDATE_FREQ = 1024
@@ -351,8 +364,8 @@ approximator = ActorCritic(
         Dense(ns, 16, relu; initW = glorot_uniform(rng)),
         Dense(16, 16, relu; initW = glorot_uniform(rng)),
         ),
-        μ = Chain(Dense(16, na; initW = glorot_uniform(rng))),
-        logσ = Chain(Dense(16, na; initW = glorot_uniform(rng))),
+        μ = Chain(Dense(16, na, tanh; initW = glorot_uniform(rng))),
+        logσ = Chain(Dense(16, na, tanh; initW = glorot_uniform(rng))),
         max_σ = Float32(1_000_000_000.0)
     ),
     critic = Chain(
@@ -395,7 +408,7 @@ end
 
 
 function loadModel()
-    f = joinpath("./src/experiments/exp05_landing2D/runs/vtol_ppo_2_1500000.bson")
+    f = joinpath("./src/experiments/exp05_landing2D/runs/vtol_ppo_2_15600000.bson")
     @load f model
     return model
 end
@@ -411,9 +424,9 @@ episode_test_reward_hook = TotalRewardPerEpisode(;is_display_on_exit=false)
 # create a env only for reward test
 test_env = VtolEnv(;name = "testVTOL", visualization = true, realtime = true);
 
-agent.policy.approximator = loadModel()|>gpu;
+# agent.policy.approximator = loadModel()|>gpu;
 
-eval_mode = false
+eval_mode = true
 plotting_position_errors = []
 plotting_rotation_errors = []
 plotting_actions = []
@@ -423,6 +436,7 @@ if eval_mode
     model = loadModel()
     model = Flux.gpu(model)
     agent.policy.approximator = model;
+    
     for i = 1:1
         run(
             agent.policy, 
@@ -437,11 +451,11 @@ else
         env,
         StopAfterStep(30_000_000),
         ComposedHook(
-            DoEveryNStep(saveModel, n=500_000), 
+            DoEveryNStep(saveModel, n=100_000), 
             DoEveryNStep(validate_policy, n=50_000),
             DoEveryNStep(n=3_000) do  t, agent, env
                 Base.with_logger(logger) do
-                    @info "reward" action_penalty = mean([sub_env.action_penalty for sub_env in env])
+                    @info "reward" action_rate_penalty = mean([sub_env.action_rate_penalty for sub_env in env])
                     @info "reward" stay_alive = mean([sub_env.stay_alive for sub_env in env])
                     @info "reward" distance_reward = mean([sub_env.distance_reward for sub_env in env])
                     @info "reward" inside_cylinder_reward = mean([sub_env.inside_cylinder_reward for sub_env in env])
