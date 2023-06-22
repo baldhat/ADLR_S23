@@ -11,6 +11,7 @@ using Random;
 using IntervalSets;
 using LinearAlgebra;
 using Distributions;
+using StructArrays;
 
 using Plots;
 using Statistics;
@@ -20,7 +21,7 @@ using TensorBoardLogger
 using Logging
 using BSON: @save, @load # save mode
 
-logger = TBLogger("logs/landing2d/landing_with_arp", tb_increment)
+logger = TBLogger("logs/landing2d/landing_rand_init", tb_increment)
 
 Flyonic.Visualization.create_visualization();
 
@@ -99,10 +100,13 @@ function VtolEnv(;
             typemin(T)..typemax(T), # previous flaps output
             ], 
     )
+
+    position = [rand(Uniform(-15.0, -7.0)); 0.0; rand(Uniform(4.0, 8.0))]
+    velocity = [rand(Uniform(2, 5.0)), 0, 0]
     
     if visualization
         Flyonic.Visualization.create_VTOL(name, actuators = true, color_vec=[1.0; 1.0; 0.6; 1.0]);
-        Flyonic.Visualization.set_transform(name, [-10.0; 0.0; 5.0] , QuatRotation(Rotations.UnitQuaternion(RotX(pi))));
+        Flyonic.Visualization.set_transform(name, position , QuatRotation(Rotations.UnitQuaternion(RotX(pi))));
         Flyonic.Visualization.set_actuators(name, [0.0; 0.0; 0.0; 0.0])
     end
 
@@ -118,8 +122,8 @@ function VtolEnv(;
         name,
         visualization, # visualization
         realtime, # realtime visualization
-        Array{T}([-10.0; 0.0; 5.0]), # x_W
-        Array{T}([4.0,0,0]), # v_B
+        Array{T}(position), # x_W
+        Array{T}(velocity), # v_B
         Matrix(Rotations.UnitQuaternion(RotX(pi))), # Float64... so T needs to be Float64
         zeros(T, 3), # ω_B
         zeros(T, 3), # wind_W
@@ -127,7 +131,7 @@ function VtolEnv(;
 
         [0.0; 0.5],# target position
         zeros(T, 2), # last action
-        0.0, # gamma
+        0.8, # gamma
 
         0.0, # reward part for action penalty
         0.0, # reward part for stay_alive
@@ -202,15 +206,15 @@ function computeReward(env::VtolEnv{A,T}) where {A,T}
 
     # reward being inside landing cylifnder
     if (0.0 < delta_height && delta_height < cylinder_height) 
-        inside_cylinder_reward = masking_fun(delta_radius, cylinder_radius) * 0.4
+        inside_cylinder_reward = masking_fun(delta_radius, cylinder_radius) * 0.5
     end
     # reward being upright
     if delta_height < cylinder_height && delta_radius < cylinder_radius
-        upright_reward = masking_fun(delta_angle, angle_radius) * 1.
+        upright_reward = masking_fun(delta_angle, angle_radius) * 0.5
         # reward having the right descend rate
         if abs(delta_angle) < angle_radius
             delta_descend_rate = env.state[6] - target_descend_rate
-            slow_descend_reward = masking_fun(delta_descend_rate, descend_rate_radius) * 6.
+            slow_descend_reward = masking_fun(delta_descend_rate, descend_rate_radius) * 1.0
             # reward being close to the ground
             if abs(delta_descend_rate) < descend_rate_radius
                 elevation = env.state[4]
@@ -245,8 +249,8 @@ function RLBase.reset!(env::VtolEnv{A,T}) where {A,T}
         Flyonic.Visualization.set_actuators(env.name, [0.0; 0.0; 0.0; 0.0])
     end
     
-    env.x_W = [-10.0; 0.0; 5.0];
-    env.v_B = [4.0; 0.0; 0.0];
+    env.x_W = [rand(Uniform(-15.0, -7.0)); 0.0; rand(Uniform(4.0, 8.0))];
+    env.v_B = [rand(Uniform(2, 5)); 0.0; 0.0];
     env.R_W = Matrix(Rotations.UnitQuaternion(RotX(pi)))
     env.ω_B = [0.0; 0.0; 0.0];
     env.wind_W = [0.0; 0.0; 0.0];
@@ -276,11 +280,13 @@ end;
 # So when a VtolEnv object is created, it has this method that can be called
 function (env::VtolEnv)(a)
     env.action = [a[1], a[2]]
+    env.action = env.gamma * env.last_action + (1 - env.gamma) * env.action
     # set the propeller trust and the two flaps 2D case considering bounds
-    next_action = [a[1] + 1,
-                   a[1] + 1,
-                   a[2],
-                   a[2]]
+    next_action = [env.action[1] + 1,
+                    env.action[1] + 1,
+                    env.action[2],
+                    env.action[2]]
+    
     
     _step!(env, next_action)
 end
@@ -334,7 +340,7 @@ function _step!(env::VtolEnv, next_action)
     # Termination criteria
     env.done =
         env.state[4] < 0.0 || # crashed
-        env.t > 15 || # stop after 15 seconds
+        env.t > 20 || # stop after 15 seconds
         env.done
     nothing
 end;
@@ -408,7 +414,7 @@ end
 
 
 function loadModel()
-    f = joinpath("./src/experiments/exp05_landing2D/runs/vtol_ppo_2_15600000.bson")
+    f = joinpath("./src/experiments/exp05_landing2D/runs/vtol_ppo_2_1100000.bson")
     @load f model
     return model
 end
@@ -417,7 +423,6 @@ function validate_policy(t, agent, env)
     run(agent.policy, test_env, StopAfterEpisode(1), episode_test_reward_hook)
     # the result of the hook
     println("\nTest reward at step $t: $(episode_test_reward_hook.rewards[end])")
-    
 end;
 
 episode_test_reward_hook = TotalRewardPerEpisode(;is_display_on_exit=false)
@@ -433,6 +438,21 @@ plotting_actions = []
 plotting_return = []
 
 if eval_mode
+    # Override the prob function to set the sigma to almost zero during evaluation
+    function RLBase.prob(
+        p::PPOPolicy{<:ActorCritic{<:GaussianNetwork},Normal},
+        state::AbstractArray,
+        mask,
+    )
+        if p.update_step < p.n_random_start
+            @error "todo"
+        else
+            μ, logσ = p.approximator.actor(send_to_device(device(p.approximator), state)) |> send_to_host 
+            logσ = log.(ones(size(logσ)) * 0.0000001)  # Uncomment during test time
+            StructArray{Normal}((μ, exp.(logσ)))
+        end
+    end
+
     model = loadModel()
     model = Flux.gpu(model)
     agent.policy.approximator = model;
