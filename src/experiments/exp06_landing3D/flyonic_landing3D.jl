@@ -227,7 +227,7 @@ RLBase.state(env::VtolEnv) = env.state
 
 function computeReward(env::VtolEnv{A,T}) where {A,T}
     # constants and functions for tuning
-    APPROACH_RADIUS = 5 # radius where the drone should transition to hovering
+    APPROACH_RADIUS = 10 # radius where the drone should transition to hovering
     L = 100 # weighting function is smoothed at r/l with a parabola
     weighting_fun_raw = (x, r) -> (1 - (abs(x / r)) ^ 0.4)
     # this weighting function smoothes the raw weighting function inside +-r/L
@@ -256,7 +256,7 @@ function computeReward(env::VtolEnv{A,T}) where {A,T}
     delta_angle = rotation_angle(RotMatrix{3}(delta_rot))
 
     # reward for being close to target
-    distance_reward = weighting_fun(l2_dist, APPROACH_RADIUS) * 0.2
+    distance_reward = weighting_fun(l2_dist, APPROACH_RADIUS) * 0.3
 
     # penalty for high action rates
     action_rate_penalty = norm(env.action - env.last_action) * 3e-2
@@ -502,7 +502,7 @@ end
 
 
 function loadModel()
-    f = joinpath("./src/experiments/exp06_landing3D/03_clean_hover.bson.bson")
+    f = joinpath("./src/experiments/exp06_landing3D/03_clean_hover.bson")
     @load f model
     return model
 end
