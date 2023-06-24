@@ -21,7 +21,7 @@ using TensorBoardLogger
 using Logging
 using BSON: @save, @load # save mode
 
-logger = TBLogger("logs/landing3d", tb_increment)
+logger = TBLogger("logs/landing3d/first_tries", tb_increment)
 
 Flyonic.Visualization.create_visualization();
 
@@ -48,11 +48,14 @@ mutable struct VtolEnv{A,T,ACT,R<:AbstractRNG} <: AbstractEnv # Parametric Const
     Δt::T
 
     # setup of landing procedure
-    ini_aoa_space::Space{ClosedInterval{T}}
+    ini_pos_space::Space{Vector{ClosedInterval{T}}}
+    ini_rot_space::Space{Vector{ClosedInterval{T}}}
+    ini_aoa_space::Space{Vector{ClosedInterval{T}}}
+    ini_vel_lb::T
+    ini_vel_ub::T
+    ini_vel_space::Space{Vector{ClosedInterval{T}}}
     target_pos_space::Space{Vector{ClosedInterval{T}}}
     target_rot_space::Space{Vector{ClosedInterval{T}}}
-    ini_pos_space::Space{Vector{ClosedInterval{T}}}
-    ini_vel_space::Space{Vector{ClosedInterval{T}}}
     target_pos::Vector{T}
     target_rot::Matrix{T}
 
@@ -119,9 +122,28 @@ function VtolEnv(;
             typemin(T)..typemax(T), # 17: previous right thrust output
             typemin(T)..typemax(T), # 18: previous left flaps output
             typemin(T)..typemax(T), # 19: previous right flaps output
-            ], 
+            ]
     )
     # specifiy sampling ranges
+    ini_pos_space = Space(ClosedInterval{T}[
+        -10.01.. -15.0, # world x
+        -10.01.. -15.0, # world y
+        6.0..6.01, # world z
+    ])
+    ini_rot_space = Space(ClosedInterval{T}[
+        0.9*pi/4..1.1*-pi/4 # rotation around global z
+    ])
+    ini_aoa_space = Space(ClosedInterval{T}[
+        deg2rad(24.999)..deg2rad(25) # angle of attack in degrees
+    ])
+    ini_vel_lb = 4.99 # velocity range lower bound in m/s
+    ini_vel_ub = 5.0 # velocity range upper bound in m/s
+    aoa = rand(ini_aoa_space)[1]
+    ini_vel_space = Space(ClosedInterval{T}[
+        cos(aoa) * ini_vel_lb..cos(aoa) * ini_vel_ub, # body x
+        0.0..0.00001, # body y
+        -sin(aoa) * ini_vel_lb.. -sin(aoa) * ini_vel_ub, # body z
+    ])
     target_pos_space = Space(ClosedInterval{T}[
         -0.11..0.1, # target x
         -0.11..0.1, # target y
@@ -130,29 +152,13 @@ function VtolEnv(;
     target_rot_space = Space(ClosedInterval{T}[
         0.99 * pi..pi # rotation around global z
     ])
-    ini_pos_space = Space(ClosedInterval{T}[
-        -15.01..-15.0, # world x
-        -15.01..-15.0, # world y
-        6.0..6.01, # world z
-    ])
-    ini_aoa_space = Space(ClosedInterval{T}[
-        deg2rad(24.999)..deg2rad(25) # angle of attack in degrees
-    ])
-    vel_range_lb = 4.99 # velocity range lower bound in m/s
-    vel_range_ub = 5.0 # velocity range upper bound in m/s
-    aoa = rand(ini_aoa_space)
-    ini_vel_space = Space(ClosedInterval{T}[
-        cos(aoa) * vel_range_lb..cos(aoa) * vel_range_ub, # body x
-        0.0..0.01, # body y
-        -sin(aoa) * vel_range_lb..-sin(aoa) * vel_range_ub, # body z
-    ])
     
     # sample spaces to generate random initial conditions
     target_pos = rand(target_pos_space)
-    target_rot = Matrix(RotZ(rand(target_rot_space))*RotY(-pi/2))
+    target_rot = Matrix(RotZ(rand(target_rot_space)[1])*RotY(-pi/2))
+    ini_pos = rand(ini_pos_space)
     
     if visualization
-        ini_pos = rand(ini_pos_space)
         Flyonic.Visualization.create_VTOL(name, actuators = true, color_vec=[1.0; 1.0; 0.6; 1.0]);
         Flyonic.Visualization.set_transform(name, ini_pos , QuatRotation(Rotations.UnitQuaternion(RotX(pi))));
         Flyonic.Visualization.set_actuators(name, [0.0; 0.0; 0.0; 0.0])
@@ -172,18 +178,21 @@ function VtolEnv(;
         visualization, # visualization
         realtime, # realtime visualization
 
-        Array{T}(position), # x_W
-        Array{T}(velocity), # v_B
-        Matrix(Rotations.UnitQuaternion(RotX(pi))), # Float64... so T needs to be Float64
+        zeros(T, 3), # x_W
+        zeros(T, 3), # v_B
+        Matrix(RotX(pi)), # Float64... so T needs to be Float64
         zeros(T, 3), # ω_B
         zeros(T, 3), # wind_W
         T(0.01), # Δt  
 
-        ini_aoa_space, # angle of attack space to be sampled
-        target_rot_space, # target rotation space to be sampled
-        target_pos_space, # target position space to be sampled
         ini_pos_space, # position space to be sampled
+        ini_rot_space, # rotation space to be sampled
+        ini_aoa_space, # angle of attack space to be sampled
+        ini_vel_ub, # initial velocity upper bound
+        ini_vel_lb, # initial velocity lower bound
         ini_vel_space, # velocity space to be sampled
+        target_pos_space, # target position space to be sampled
+        target_rot_space, # target rotation space to be sampled
         target_pos, # target position
         target_rot, # target rotation
 
@@ -232,7 +241,7 @@ function computeReward(env::VtolEnv{A,T}) where {A,T}
     masking_fun = (x, r) -> (max(0, weighting_fun(x, r)))
 
     # reward for staying alive
-    stay_alive = 0.02
+    stay_alive = 0.05
 
     # extract movement metrics from state_space
     l2_dist = norm(env.state[1:3])
@@ -313,9 +322,15 @@ function RLBase.reset!(env::VtolEnv{A,T}) where {A,T}
     end
     
     env.x_W = rand(env.ini_pos_space)
+    aoa = rand(env.ini_aoa_space)[1]
+    env.ini_vel_space = Space(ClosedInterval{T}[
+        cos(aoa) * env.ini_vel_lb..cos(aoa) * env.ini_vel_ub, # body x
+        0.0..0.00001, # body y
+        -sin(aoa) * env.ini_vel_lb.. -sin(aoa) * env.ini_vel_ub, # body z
+    ])
     env.v_B = rand(env.ini_vel_space);
-    aoa = rand(env.ini_aoa_space)
-    env.R_W = Matrix(Rotations.UnitQuaternion(RotZ(rand(-pi, pi))*RotY(-aoa)*RotX(pi)))
+    ini_rot = rand(env.ini_rot_space)[1]
+    env.R_W = Matrix(Rotations.UnitQuaternion(RotZ(ini_rot)*RotY(-aoa)*RotX(pi)))
     env.ω_B = [0.0; 0.0; 0.0];
     env.wind_W = [0.0; 0.0; 0.0];
     v_W = env.R_W * env.v_B
@@ -331,7 +346,7 @@ function RLBase.reset!(env::VtolEnv{A,T}) where {A,T}
     
     env.last_action = zeros(T, 4)
     env.target_pos = rand(env.target_pos_space)
-    env.target_rot = Matrix(RotZ(rand(target_rot_space))*RotY(-pi/2))
+    env.target_rot = Matrix(RotZ(rand(env.target_rot_space)[1])*RotY(-pi/2))
     
     delta_rot = transpose(env.R_W) * env.target_rot
     env.state = [
@@ -352,7 +367,7 @@ end;
 # defines a methods for a callable object.
 # So when a VtolEnv object is created, it has this method that can be called
 function (env::VtolEnv)(a)
-    env.action = a
+    env.action = [a[1], a[2], a[3], a[4]]
     env.action = env.gamma * env.last_action + (1 - env.gamma) * env.action
     # set the propeller trust and the two flaps 2D case
     next_action = [env.action[1] + 1, # ranges from 0 to 2 (network predicts in [-1, 1])
@@ -362,7 +377,6 @@ function (env::VtolEnv)(a)
     
     _step!(env, next_action)
 end
-
 
 
 function _step!(env::VtolEnv, next_action)
@@ -389,12 +403,13 @@ function _step!(env::VtolEnv, next_action)
     
     # State space
     delta_rot = transpose(env.R_W) * env.target_rot
-    env_state[1:3] = env.x_W - env.target_pos
-    env_state[4:6] = delta_rot[:, 1]
-    env_state[7:9] = delta_rot[:, 2]
-    env_state[10:12] = env.ω_B
-    env_state[13:15] = v_W
-    env_state[16:18] = env.last_action
+    v_W = env.R_W * env.v_B
+    env.state[1:3] = env.x_W - env.target_pos
+    env.state[4:6] = delta_rot[:, 1]
+    env.state[7:9] = delta_rot[:, 2]
+    env.state[10:12] = env.ω_B
+    env.state[13:15] = v_W
+    env.state[16:19] = env.last_action
     
     if eval_mode
         push!(plotting_position_errors, norm(env.state[3:4] - env.state[7:8]))	
@@ -405,8 +420,8 @@ function _step!(env::VtolEnv, next_action)
 
     # Termination criteria
     env.done =
-        env.state[4] < 0.0 || # crashed
-        env.t > 20 || # stop after 15 seconds
+        env.state[3] < 0.0 || # crashed
+        env.t > 20 || # stop after 20 seconds
         env.done
     nothing
 end;
@@ -473,14 +488,14 @@ agent = Agent( # A wrapper of an AbstractPolicy
 
 function saveModel(t, agent, env)
     model = cpu(agent.policy.approximator)   
-    f = joinpath("./src/experiments/exp06_landing2D/runs/", "landing3D_$t.bson")
+    f = joinpath("./src/experiments/exp06_landing3D/runs/", "landing3D_$t.bson")
     @save f model
     println("parameters at step $t saved to $f")
 end
 
 
 function loadModel()
-    f = joinpath("./src/experiments/exp05_landing2D/landing2D_ar_gamma.bson")
+    f = joinpath("./src/experiments/exp05_landing2D/landing3D_ar_gamma.bson")
     @load f model
     return model
 end
@@ -497,7 +512,7 @@ test_env = VtolEnv(;name = "testVTOL", visualization = true, realtime = true);
 
 # agent.policy.approximator = loadModel()|>gpu;
 
-eval_mode = true
+eval_mode = false
 plotting_position_errors = []
 plotting_rotation_errors = []
 plotting_actions = []
