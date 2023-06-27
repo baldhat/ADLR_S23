@@ -21,7 +21,11 @@ using TensorBoardLogger
 using Logging
 using BSON: @save, @load # save mode
 
-logger = TBLogger("logs/landing3d/first_tries", tb_increment)
+eval_mode = false
+if !eval_mode
+    logger = TBLogger("logs/landing3d/first_tries", tb_increment)
+end
+print("Starting in eval mode: $eval_mode")
 
 Flyonic.Visualization.create_visualization();
 
@@ -127,12 +131,12 @@ function VtolEnv(;
     )
     # specifiy sampling ranges
     ini_pos_space = Space(ClosedInterval{T}[
-        -10.0.. 10.0, # world x
-        -10.0.. 10.0, # world y
+        -15.0.. 15.0, # world x
+        -15.0.. 15.0, # world y
         6.0..10.0, # world z
     ])
     ini_rot_space = Space(ClosedInterval{T}[
-        -deg2rad(-20)..deg2rad(20) # global delta z rotation around heading towards target
+        -deg2rad(-20)..deg2rad(20) # global delta z rotation around heading towards target_descend_rate
     ])
     ini_aoa_space = Space(ClosedInterval{T}[
         deg2rad(20.0)..deg2rad(25.0) # angle of attack in degrees
@@ -151,7 +155,7 @@ function VtolEnv(;
         0.499..0.5, # target z
     ])
     target_rot_space = Space(ClosedInterval{T}[
-        0.9999*pi..pi # rotation around global z
+        -pi..pi # rotation around global z
     ])
     
     # sample spaces to generate random initial conditions
@@ -228,7 +232,7 @@ RLBase.state(env::VtolEnv) = env.state
 function computeReward(env::VtolEnv{A,T}) where {A,T}
     # constants and functions for tuning
     APPROACH_RADIUS = 10 # radius where the drone should transition to hovering
-    L = 100 # weighting function is smoothed at r/l with a parabola
+    L = 500 # weighting function is smoothed at r/l with a parabola
     weighting_fun_raw = (x, r) -> (1 - (abs(x / r)) ^ 0.4)
     # this weighting function smoothes the raw weighting function inside +-r/L
     # with a parabola to limit the maximum gradient
@@ -253,50 +257,50 @@ function computeReward(env::VtolEnv{A,T}) where {A,T}
     delta_rot[:, 1] = env.state[4:6] / norm(env.state[4:6]) # ensure unit length
     delta_rot[:, 2] = env.state[7:9] / norm(env.state[7:9]) # ensure unit length
     delta_rot[:, 3] = cross(delta_rot[:, 1], delta_rot[:, 2])
-    delta_angle = rotation_angle(RotMatrix{3}(delta_rot))
 
-    # reward for being close to target
-    distance_reward = weighting_fun(l2_dist, APPROACH_RADIUS) * 0.3
-
+    # reward for being close to target, which is reduced, once a certain return
+    # threshold is reached. Thisway, in early training, the drone learns to reach
+    # the target quickly, but then does not oversaturate the reward.
+    distance_reward = weighting_fun(l2_dist, APPROACH_RADIUS) * (env.Return < 100.0 ? 0.3 : 0.1)
+    
     # penalty for high action rates
-    action_rate_penalty = norm(env.action - env.last_action) * 3e-2
+    action_rate_penalty = norm(env.action - env.last_action) * 1e-2
     env.last_action = env.action # probably there is a better place for this
-
+    
     # penalty for high rotation rates
-    rotation_rate_penalty = l2_rot_vel * 5e-3
-
+    rotation_rate_penalty = l2_rot_vel * 2e-3
+    
     # model of the landing procedure
     cylinder_radius = 0.5
-    cylinder_height = 3.0
-    angle_radius = 0.5 # allowed deviation from target angle (= 0.0)
-    target_descend_rate = -0.2 # target descend rate
+    cylinder_height = 1.0
+    angle_radius = pi # allowed deviation from target angle (= 0.0)
+    target_descend_rate = -0.3 # target descend rate
     descend_rate_radius = 0.1 # allowed deviation from target descend rate
     elevation_radius = 0.05 # once being this close to the ground, the drone is considered having landed
     
-    # drone is inside cylinder
-    delta_height = env.state[3]
-    delta_radius = norm(env.state[1:2])
-
     inside_cylinder_reward = 0.0
     rotation_reward = 0.0
     slow_descend_reward = 0.0
     landed_reward = 0.0
-
+    
     # reward being inside landing cylifnder
+    delta_height = env.state[3]
+    delta_radius = norm(env.state[1:2])
     if (0.0 < delta_height < cylinder_height) 
         inside_cylinder_reward = masking_fun(delta_radius, cylinder_radius) * 0.5
     end
     # reward being correctly oriented towards target
     if 0.0 < delta_height < cylinder_height && delta_radius < cylinder_radius
-        rotation_reward = masking_fun(delta_angle, angle_radius) * 1.0
-        # reward having the right descend rate
-        if abs(delta_angle) < angle_radius
-            delta_descend_rate = env.state[15] - target_descend_rate
-            slow_descend_reward = masking_fun(delta_descend_rate, descend_rate_radius) * 4.0
-            # reward being close to the ground
-            if abs(delta_descend_rate) < descend_rate_radius
+        delta_descend_rate = env.state[15] - target_descend_rate
+        slow_descend_reward = masking_fun(delta_descend_rate, descend_rate_radius) * 0.7
+        # reward being close to the ground
+        if abs(delta_descend_rate) < descend_rate_radius
+            delta_angle = rotation_angle(RotMatrix{3}(delta_rot))
+            rotation_reward = masking_fun(delta_angle, angle_radius) * 1.0
+            # reward having the right descend rate
+            if abs(delta_angle) < angle_radius
                 elevation = env.state[3]
-                landed_reward = masking_fun(elevation, elevation_radius) * 150.0
+                landed_reward = masking_fun(elevation, elevation_radius) * 20.0
                 if elevation < 0.1 * elevation_radius
                     landed_reward += 200.0
                     env.done = true
@@ -304,7 +308,7 @@ function computeReward(env::VtolEnv{A,T}) where {A,T}
             end
         end
     end
-
+    
     env.stay_alive += stay_alive
     env.distance_reward += distance_reward
     env.inside_cylinder_reward += inside_cylinder_reward
@@ -313,6 +317,7 @@ function computeReward(env::VtolEnv{A,T}) where {A,T}
     env.landed_reward += landed_reward
     env.action_rate_penalty -= action_rate_penalty
     env.rotation_rate_penalty -= rotation_rate_penalty
+
     reward = stay_alive + distance_reward + inside_cylinder_reward + rotation_reward + slow_descend_reward + landed_reward - action_rate_penalty - rotation_rate_penalty
     env.Return += reward
     
@@ -323,12 +328,6 @@ RLBase.reward(env::VtolEnv{A,T}) where {A,T} = computeReward(env)
 
 
 function RLBase.reset!(env::VtolEnv{A,T}) where {A,T}
-    # Visualize initial state
-    if env.visualization
-        Flyonic.Visualization.set_transform(env.name, env.x_W, QuatRotation(env.R_W));
-        Flyonic.Visualization.set_actuators(env.name, [0.0; 0.0; 0.0; 0.0])
-    end
-    
     # sample initial state
     env.x_W = rand(env.ini_pos_space)
     aoa = rand(env.ini_aoa_space)[1]
@@ -342,7 +341,7 @@ function RLBase.reset!(env::VtolEnv{A,T}) where {A,T}
     # point towards the target (with randomisation)
     target_heading = (env.target_pos[1:2] - env.x_W[1:2])
     target_heading /= norm(target_heading)
-    angle_to_target = acos(dot(target_heading, [1.0; 0.0]))
+    angle_to_target = atan(target_heading[2], target_heading[1])
     ini_rot = angle_to_target + rand(env.ini_rot_space)[1]
     env.R_W = Matrix(Rotations.UnitQuaternion(RotZ(ini_rot)*RotY(-aoa)*RotX(pi)))
     # no angular velocity, no wind
@@ -378,6 +377,12 @@ function RLBase.reset!(env::VtolEnv{A,T}) where {A,T}
     env.t = 0.0
     env.action = rand(env.action_space)
     env.done = false
+    
+    # Visualize initial state
+    if env.visualization
+        Flyonic.Visualization.set_transform(env.name, env.x_W, QuatRotation(env.R_W));
+        Flyonic.Visualization.set_actuators(env.name, [0.0; 0.0; 0.0; 0.0])
+    end
     nothing
 end;
 
@@ -385,15 +390,15 @@ end;
 # defines a methods for a callable object.
 # So when a VtolEnv object is created, it has this method that can be called
 function (env::VtolEnv)(a)
-    # env.action = [a[1], a[2], a[3], a[4]]
-    # env.action = env.gamma * env.last_action + (1 - env.gamma) * env.action
-    # # set the propeller trust and the two flaps 2D case
-    # next_action = [env.action[1] + 1, # ranges from 0 to 2 (network predicts in [-1, 1])
-    #                env.action[2] + 1, # ranges from 0 to 2 (network predicts in [-1, 1])
-    #                env.action[3], # ranges from -1 to 1 (network predicts in [-1, 1])
-    #                env.action[4]] # ranges from -1 to 1 (network predicts in [-1, 1])
+    env.action = [a[1], a[2], a[3], a[4]]
+    env.action = env.gamma * env.last_action + (1 - env.gamma) * env.action
+    # set the propeller trust and the two flaps 2D case
+    next_action = [env.action[1] + 1, # ranges from 0 to 2 (network predicts in [-1, 1])
+                   env.action[2] + 1, # ranges from 0 to 2 (network predicts in [-1, 1])
+                   env.action[3], # ranges from -1 to 1 (network predicts in [-1, 1])
+                   env.action[4]] # ranges from -1 to 1 (network predicts in [-1, 1])
     
-    # _step!(env, next_action)
+    _step!(env, next_action)
 end
 
 
@@ -439,11 +444,10 @@ function _step!(env::VtolEnv, next_action)
     # Termination criteria
     env.done =
         env.state[3] < 0.0 || # crashed
-        env.t > 20 || # stop after 20 seconds
+        env.t > 30 || # stop after 30 seconds
         env.done
     nothing
 end;
-
 
 
 seed = 111   
@@ -479,8 +483,7 @@ approximator = ActorCritic(
     optimizer = ADAM(1e-3),
 );
 
-
-
+# Define the agent
 agent = Agent( # A wrapper of an AbstractPolicy
     # AbstractPolicy: the policy to use
     policy = PPOPolicy(;
@@ -501,7 +504,7 @@ agent = Agent( # A wrapper of an AbstractPolicy
     ),
 );
 
-
+# callback functions for training
 function saveModel(t, agent, env)
     model = cpu(agent.policy.approximator)   
     f = joinpath("./src/experiments/exp06_landing3D/runs/", "landing3D_$t.bson")
@@ -509,9 +512,8 @@ function saveModel(t, agent, env)
     println("parameters at step $t saved to $f")
 end
 
-
 function loadModel()
-    f = joinpath("./src/experiments/exp06_landing3D/03_clean_hover.bson")
+    f = joinpath("./src/experiments/exp06_landing3D/04_random_clean_hover.bson")
     @load f model
     return model
 end
@@ -528,7 +530,6 @@ test_env = VtolEnv(;name = "testVTOL", visualization = true, realtime = true);
 
 # agent.policy.approximator = loadModel()|>gpu;
 
-eval_mode = false
 plotting_position_errors = []
 plotting_rotation_errors = []
 plotting_actions = []
@@ -558,7 +559,7 @@ if eval_mode
         run(
             agent.policy, 
             VtolEnv(;name = "evalVTOL", visualization = true, realtime = true), 
-            StopAfterEpisode(10), 
+            StopAfterEpisode(1), 
             episode_test_reward_hook
         )
     end
@@ -581,7 +582,7 @@ else
         StopAfterStep(100_000_000),
         ComposedHook(
             DoEveryNStep(saveModel, n=100_000), 
-            DoEveryNStep(validate_policy, n=50_000),
+            DoEveryNStep(validate_policy, n=100_000),
             DoEveryNStep(n=3_000) do  t, agent, env
                 Base.with_logger(logger) do
                     @info "reward" action_rate_penalty = mean([sub_env.action_rate_penalty for sub_env in env])
