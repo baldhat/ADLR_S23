@@ -132,7 +132,7 @@ function VtolEnv(;
         6.0..10.0, # world z
     ])
     ini_rot_space = Space(ClosedInterval{T}[
-        -pi..pi # rotation around global z
+        -deg2rad(-20)..deg2rad(20) # global delta z rotation around heading towards target
     ])
     ini_aoa_space = Space(ClosedInterval{T}[
         deg2rad(20.0)..deg2rad(25.0) # angle of attack in degrees
@@ -146,12 +146,12 @@ function VtolEnv(;
         -sin(aoa) * ini_vel_lb.. -sin(aoa) * ini_vel_ub, # body z
     ])
     target_pos_space = Space(ClosedInterval{T}[
-        -3.0..3.0, # target x
-        -3.0..3.0, # target y
-        0.49..0.5, # target z
+        -0.001..0.0, # target x
+        -0.001..0.0, # target y
+        0.499..0.5, # target z
     ])
     target_rot_space = Space(ClosedInterval{T}[
-        -pi..pi # rotation around global z
+        0.9999*pi..pi # rotation around global z
     ])
     
     # sample spaces to generate random initial conditions
@@ -329,6 +329,7 @@ function RLBase.reset!(env::VtolEnv{A,T}) where {A,T}
         Flyonic.Visualization.set_actuators(env.name, [0.0; 0.0; 0.0; 0.0])
     end
     
+    # sample initial state
     env.x_W = rand(env.ini_pos_space)
     aoa = rand(env.ini_aoa_space)[1]
     env.ini_vel_space = Space(ClosedInterval{T}[
@@ -337,12 +338,18 @@ function RLBase.reset!(env::VtolEnv{A,T}) where {A,T}
         -sin(aoa) * env.ini_vel_lb.. -sin(aoa) * env.ini_vel_ub, # body z
     ])
     env.v_B = rand(env.ini_vel_space);
-    ini_rot = rand(env.ini_rot_space)[1]
+    # calculate angle between target and drone to initially have the VTOL 
+    # point towards the target (with randomisation)
+    target_heading = (env.target_pos[1:2] - env.x_W[1:2])
+    target_heading /= norm(target_heading)
+    angle_to_target = acos(dot(target_heading, [1.0; 0.0]))
+    ini_rot = angle_to_target + rand(env.ini_rot_space)[1]
     env.R_W = Matrix(Rotations.UnitQuaternion(RotZ(ini_rot)*RotY(-aoa)*RotX(pi)))
+    # no angular velocity, no wind
     env.ω_B = [0.0; 0.0; 0.0];
     env.wind_W = [0.0; 0.0; 0.0];
-    v_W = env.R_W * env.v_B
-
+    
+    # reset tracking variables for rewards
     env.stay_alive = 0.0
     env.inside_cylinder_reward = 0.0
     env.distance_reward = 0.0
@@ -357,7 +364,9 @@ function RLBase.reset!(env::VtolEnv{A,T}) where {A,T}
     env.target_pos = rand(env.target_pos_space)
     env.target_rot = Matrix(RotZ(rand(env.target_rot_space)[1])*RotY(-pi/2))
     
+    # set initial VTOL state
     delta_rot = transpose(env.R_W) * env.target_rot
+    v_W = env.R_W * env.v_B
     env.state = [
         env.x_W - env.target_pos;
         delta_rot[:,1];
@@ -376,15 +385,15 @@ end;
 # defines a methods for a callable object.
 # So when a VtolEnv object is created, it has this method that can be called
 function (env::VtolEnv)(a)
-    env.action = [a[1], a[2], a[3], a[4]]
-    env.action = env.gamma * env.last_action + (1 - env.gamma) * env.action
-    # set the propeller trust and the two flaps 2D case
-    next_action = [env.action[1] + 1, # ranges from 0 to 2 (network predicts in [-1, 1])
-                   env.action[2] + 1, # ranges from 0 to 2 (network predicts in [-1, 1])
-                   env.action[3], # ranges from -1 to 1 (network predicts in [-1, 1])
-                   env.action[4]] # ranges from -1 to 1 (network predicts in [-1, 1])
+    # env.action = [a[1], a[2], a[3], a[4]]
+    # env.action = env.gamma * env.last_action + (1 - env.gamma) * env.action
+    # # set the propeller trust and the two flaps 2D case
+    # next_action = [env.action[1] + 1, # ranges from 0 to 2 (network predicts in [-1, 1])
+    #                env.action[2] + 1, # ranges from 0 to 2 (network predicts in [-1, 1])
+    #                env.action[3], # ranges from -1 to 1 (network predicts in [-1, 1])
+    #                env.action[4]] # ranges from -1 to 1 (network predicts in [-1, 1])
     
-    _step!(env, next_action)
+    # _step!(env, next_action)
 end
 
 
