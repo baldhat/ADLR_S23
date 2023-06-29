@@ -142,7 +142,7 @@ function VtolEnv(;
         deg2rad(20.0)..deg2rad(25.0) # angle of attack in degrees
     ])
     ini_vel_lb = 3.0 # velocity range lower bound in m/s
-    ini_vel_ub = 6.0 # velocity range upper bound in m/s
+    ini_vel_ub = 8.0 # velocity range upper bound in m/s
     aoa = rand(ini_aoa_space)[1]
     ini_vel_space = Space(ClosedInterval{T}[
         cos(aoa) * ini_vel_lb..cos(aoa) * ini_vel_ub, # body x
@@ -261,14 +261,14 @@ function computeReward(env::VtolEnv{A,T}) where {A,T}
     # reward for being close to target, which is reduced, once a certain return
     # threshold is reached. Thisway, in early training, the drone learns to reach
     # the target quickly, but then does not oversaturate the reward.
-    distance_reward = weighting_fun(l2_dist, APPROACH_RADIUS) * (env.Return < 100.0 ? 0.3 : 0.1)
+    distance_reward = weighting_fun(l2_dist, APPROACH_RADIUS) * 0.3
     
     # penalty for high action rates
     action_rate_penalty = norm(env.action - env.last_action) * 1e-2
     env.last_action = env.action # probably there is a better place for this
     
     # penalty for high rotation rates
-    rotation_rate_penalty = l2_rot_vel * 2e-3
+    rotation_rate_penalty = l2_rot_vel * 3e-3
     
     # model of the landing procedure
     cylinder_radius = 0.5
@@ -287,18 +287,18 @@ function computeReward(env::VtolEnv{A,T}) where {A,T}
     delta_height = env.state[3]
     delta_radius = norm(env.state[1:2])
     if (0.0 < delta_height < cylinder_height) 
-        inside_cylinder_reward = masking_fun(delta_radius, cylinder_radius) * 0.5
+        inside_cylinder_reward = masking_fun(delta_radius, cylinder_radius) * 1.0
     end
     # reward being correctly oriented towards target
     if 0.0 < delta_height < cylinder_height && delta_radius < cylinder_radius
-        delta_descend_rate = env.state[15] - target_descend_rate
-        slow_descend_reward = masking_fun(delta_descend_rate, descend_rate_radius) * 0.7
-        # reward being close to the ground
-        if abs(delta_descend_rate) < descend_rate_radius
-            delta_angle = rotation_angle(RotMatrix{3}(delta_rot))
-            rotation_reward = masking_fun(delta_angle, angle_radius) * 1.0
-            # reward having the right descend rate
-            if abs(delta_angle) < angle_radius
+        delta_angle = rotation_angle(RotMatrix{3}(delta_rot))
+        rotation_reward = masking_fun(delta_angle, angle_radius) * 2.0
+        # reward having the right descend rate
+        if abs(delta_angle) < angle_radius
+            delta_descend_rate = env.state[15] - target_descend_rate
+            slow_descend_reward = masking_fun(delta_descend_rate, descend_rate_radius) * 5.0
+            # reward being close to the ground
+            if abs(delta_descend_rate) < descend_rate_radius
                 elevation = env.state[3]
                 landed_reward = masking_fun(elevation, elevation_radius) * 20.0
                 if elevation < 0.1 * elevation_radius
@@ -330,6 +330,10 @@ RLBase.reward(env::VtolEnv{A,T}) where {A,T} = computeReward(env)
 function RLBase.reset!(env::VtolEnv{A,T}) where {A,T}
     # sample initial state
     env.x_W = rand(env.ini_pos_space)
+    # make sure, drone is not directly above target
+    while (norm(env.x_W[1:2] - env.target_pos[1:2]) < 5.0)
+        env.x_W = rand(env.ini_pos_space)
+    end
     aoa = rand(env.ini_aoa_space)[1]
     env.ini_vel_space = Space(ClosedInterval{T}[
         cos(aoa) * env.ini_vel_lb..cos(aoa) * env.ini_vel_ub, # body x
