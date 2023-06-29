@@ -289,25 +289,48 @@ function computeReward(env::VtolEnv{A,T}) where {A,T}
     if (0.0 < delta_height < cylinder_height) 
         inside_cylinder_reward = masking_fun(delta_radius, cylinder_radius) * 1.0
     end
-    # reward being correctly oriented towards target
+    # # REWARDS IN SEQUENCE
+    # # reward being correctly oriented towards target
+    # if 0.0 < delta_height < cylinder_height && delta_radius < cylinder_radius
+    #     delta_angle = rotation_angle(RotMatrix{3}(delta_rot))
+    #     rotation_reward = masking_fun(delta_angle, angle_radius) * 2.0
+    #     # reward having the right descend rate
+    #     if abs(delta_angle) < angle_radius
+    #         delta_descend_rate = env.state[15] - target_descend_rate
+    #         slow_descend_reward = masking_fun(delta_descend_rate, descend_rate_radius) * 5.0
+    #         # reward being close to the ground
+    #         if abs(delta_descend_rate) < descend_rate_radius
+    #             elevation = env.state[3]
+    #             landed_reward = masking_fun(elevation, elevation_radius) * 20.0
+    #             if elevation < 0.1 * elevation_radius
+    #                 landed_reward += 200.0
+    #                 env.done = true
+    #             end
+    #         end
+    #     end
+    # end
+
+    # REWARDS IN PARALLEL
     if 0.0 < delta_height < cylinder_height && delta_radius < cylinder_radius
+        # reward being correctly oriented towards target
         delta_angle = rotation_angle(RotMatrix{3}(delta_rot))
         rotation_reward = masking_fun(delta_angle, angle_radius) * 2.0
         # reward having the right descend rate
-        if abs(delta_angle) < angle_radius
-            delta_descend_rate = env.state[15] - target_descend_rate
-            slow_descend_reward = masking_fun(delta_descend_rate, descend_rate_radius) * 5.0
-            # reward being close to the ground
-            if abs(delta_descend_rate) < descend_rate_radius
-                elevation = env.state[3]
-                landed_reward = masking_fun(elevation, elevation_radius) * 20.0
-                if elevation < 0.1 * elevation_radius
-                    landed_reward += 200.0
-                    env.done = true
-                end
-            end
+        delta_descend_rate = env.state[15] - target_descend_rate
+        slow_descend_reward = masking_fun(delta_descend_rate, descend_rate_radius) * 5.0
+        # reward being close to the ground
+        elevation = env.state[3]
+        landed_reward = masking_fun(elevation, elevation_radius) * 20.0
+        # detect if landed
+        if (0.0 < delta_height < cylinder_height && delta_radius < cylinder_radius) &&
+            (abs(delta_angle) < angle_radius) &&
+            (abs(delta_descend_rate) < descend_rate_radius) &&
+            (elevation < 0.1 * elevation_radius)
+            landed_reward += 200.0
+            env.done = true
         end
     end
+
     
     env.stay_alive += stay_alive
     env.distance_reward += distance_reward
