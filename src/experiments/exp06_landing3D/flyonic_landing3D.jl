@@ -23,7 +23,7 @@ using BSON: @save, @load # save mode
 
 eval_mode = false
 if !eval_mode
-    logger = TBLogger("logs/landing3d/first_tries", tb_increment)
+    logger = TBLogger("logs/landing3d/new_init_space", tb_increment)
 end
 print("Starting in eval mode: $eval_mode")
 
@@ -130,16 +130,16 @@ function VtolEnv(;
             ]
     )
     # specifiy sampling ranges
-    ini_pos_space = Space(ClosedInterval{T}[
-        -15.0.. 15.0, # world x
-        -15.0.. 15.0, # world y
-        6.0..10.0, # world z
+    ini_pos_space = Space(ClosedInterval{T}[ 
+        5.0..15.0, # radius
+        0.0..deg2rad(360), # angle
+        5.0..10.0, # world z
     ])
     ini_rot_space = Space(ClosedInterval{T}[
-        -deg2rad(-20)..deg2rad(20) # global delta z rotation around heading towards target_descend_rate
+        -deg2rad(-1)..deg2rad(1) #TODO global delta z rotation around heading towards target_descend_rate
     ])
     ini_aoa_space = Space(ClosedInterval{T}[
-        deg2rad(20.0)..deg2rad(25.0) # angle of attack in degrees
+        deg2rad(5.0)..deg2rad(10.0) #TODO angle of attack in degrees
     ])
     ini_vel_lb = 3.0 # velocity range lower bound in m/s
     ini_vel_ub = 8.0 # velocity range upper bound in m/s
@@ -155,13 +155,17 @@ function VtolEnv(;
         0.499..0.5, # target z
     ])
     target_rot_space = Space(ClosedInterval{T}[
-        -pi..pi # rotation around global z
+        -0.001..0.001 # rotation around global z
     ])
     
     # sample spaces to generate random initial conditions
     target_pos = rand(target_pos_space)
     target_rot = Matrix(RotZ(rand(target_rot_space)[1])*RotY(-pi/2))
     ini_pos = rand(ini_pos_space)
+    x = ini_pos[1] * cos(ini_pos[2])
+    y = ini_pos[1] * sin(ini_pos[2])
+    z = ini_pos[3]
+    ini_pos = [x; y; z]
     
     if visualization
         Flyonic.Visualization.create_VTOL(name, actuators = true, color_vec=[1.0; 1.0; 0.6; 1.0]);
@@ -188,6 +192,7 @@ function VtolEnv(;
         Matrix(RotX(pi)), # Float64... so T needs to be Float64
         zeros(T, 3), # ω_B
         zeros(T, 3), # wind_W
+        # rand(Uniform(0.0, 3.0), 3), # wind_W
         T(0.01), # Δt  
 
         ini_pos_space, # position space to be sampled
@@ -202,7 +207,7 @@ function VtolEnv(;
         target_rot, # target rotation
 
         zeros(T, 4), # last action
-        0.4, # gamma for exponential smoothing
+        0.9, # gamma for exponential smoothing
 
         0.0, # penalty for action rates
         0.0, # penalty for rotationi velocity
@@ -268,15 +273,15 @@ function computeReward(env::VtolEnv{A,T}) where {A,T}
     env.last_action = env.action # probably there is a better place for this
     
     # penalty for high rotation rates
-    rotation_rate_penalty = l2_rot_vel * 3e-3
+    rotation_rate_penalty = l2_rot_vel * 3e-4
     
     # model of the landing procedure
     cylinder_radius = 0.5
-    cylinder_height = 1.0
+    cylinder_height = 3.0
     angle_radius = pi # allowed deviation from target angle (= 0.0)
     target_descend_rate = -0.3 # target descend rate
-    descend_rate_radius = 0.1 # allowed deviation from target descend rate
-    elevation_radius = 0.05 # once being this close to the ground, the drone is considered having landed
+    descend_rate_radius = 0.2 # allowed deviation from target descend rate
+    elevation_radius = 0.1 # once being this close to the ground, the drone is considered having landed
     
     inside_cylinder_reward = 0.0
     rotation_reward = 0.0
@@ -325,8 +330,8 @@ function computeReward(env::VtolEnv{A,T}) where {A,T}
         if (0.0 < delta_height < cylinder_height && delta_radius < cylinder_radius) &&
             (abs(delta_angle) < angle_radius) &&
             (abs(delta_descend_rate) < descend_rate_radius) &&
-            (elevation < 0.1 * elevation_radius)
-            landed_reward += 200.0
+            (elevation < elevation_radius)
+            landed_reward += 1000.0
             env.done = true
         end
     end
@@ -352,11 +357,12 @@ RLBase.reward(env::VtolEnv{A,T}) where {A,T} = computeReward(env)
 
 function RLBase.reset!(env::VtolEnv{A,T}) where {A,T}
     # sample initial state
-    env.x_W = rand(env.ini_pos_space)
-    # make sure, drone is not directly above target
-    while (norm(env.x_W[1:2] - env.target_pos[1:2]) < 5.0)
-        env.x_W = rand(env.ini_pos_space)
-    end
+    ini_pos = rand(env.ini_pos_space)
+    x = ini_pos[1] * cos(ini_pos[2])
+    y = ini_pos[1] * sin(ini_pos[2])
+    z = ini_pos[3]
+    env.x_W = [x; y; z]
+    
     aoa = rand(env.ini_aoa_space)[1]
     env.ini_vel_space = Space(ClosedInterval{T}[
         cos(aoa) * env.ini_vel_lb..cos(aoa) * env.ini_vel_ub, # body x
@@ -374,6 +380,7 @@ function RLBase.reset!(env::VtolEnv{A,T}) where {A,T}
     # no angular velocity, no wind
     env.ω_B = [0.0; 0.0; 0.0];
     env.wind_W = [0.0; 0.0; 0.0];
+    # env.wind_W = rand(Uniform(0.0, 3.0), 3);
     
     # reset tracking variables for rewards
     env.stay_alive = 0.0
@@ -419,7 +426,7 @@ end;
 function (env::VtolEnv)(a)
     env.action = [a[1], a[2], a[3], a[4]]
     env.action = env.gamma * env.last_action + (1 - env.gamma) * env.action
-    # set the propeller trust and the two flaps 2D case
+    # set the propeller trusts and the flaps
     next_action = [env.action[1] + 1, # ranges from 0 to 2 (network predicts in [-1, 1])
                    env.action[2] + 1, # ranges from 0 to 2 (network predicts in [-1, 1])
                    env.action[3], # ranges from -1 to 1 (network predicts in [-1, 1])
@@ -471,7 +478,7 @@ function _step!(env::VtolEnv, next_action)
     # Termination criteria
     env.done =
         env.state[3] < 0.0 || # crashed
-        env.t > 30 || # stop after 30 seconds
+        env.t > 20 || # stop after 20 seconds
         env.done
     nothing
 end;
@@ -479,7 +486,7 @@ end;
 
 seed = 111   
 rng = StableRNG(seed)
-N_ENV = 16
+N_ENV = 8
 UPDATE_FREQ = 1024
     
     
@@ -495,16 +502,16 @@ ns, na = length(state(env[1])), length(action_space(env[1]))
 approximator = ActorCritic(
     actor = GaussianNetwork(
         pre = Chain(
-        Dense(ns, 16, relu; initW = glorot_uniform(rng)),
-        Dense(16, 16, relu; initW = glorot_uniform(rng)),
+        Dense(ns, 32, relu; initW = glorot_uniform(rng)),
+        Dense(32, 32, relu; initW = glorot_uniform(rng)),
         ),
-        μ = Chain(Dense(16, na, tanh; initW = glorot_uniform(rng))),
-        logσ = Chain(Dense(16, na, tanh; initW = glorot_uniform(rng))),
+        μ = Chain(Dense(32, na, tanh; initW = glorot_uniform(rng))),
+        logσ = Chain(Dense(32, na, tanh; initW = glorot_uniform(rng))),
         max_σ = Float32(1_000_000_000.0)
     ),
     critic = Chain(
-        Dense(ns, 16, relu; initW = glorot_uniform(rng)),
-        Dense(16, 16, relu; initW = glorot_uniform(rng)),
+        Dense(ns, 32, relu; initW = glorot_uniform(rng)),
+        Dense(32, 16, relu; initW = glorot_uniform(rng)),
         Dense(16, 1; initW = glorot_uniform(rng)),
     ),
     optimizer = ADAM(1e-3),
@@ -540,7 +547,7 @@ function saveModel(t, agent, env)
 end
 
 function loadModel()
-    f = joinpath("./src/experiments/exp06_landing3D/04_random_clean_hover.bson")
+    f = joinpath("./src/experiments/exp06_landing3D/runs/candidate4.bson")
     @load f model
     return model
 end
@@ -582,7 +589,7 @@ if eval_mode
     model = Flux.gpu(model)
     agent.policy.approximator = model;
     
-    for i = 1:1
+    for i = 1:6
         run(
             agent.policy, 
             VtolEnv(;name = "evalVTOL", visualization = true, realtime = true), 
