@@ -21,7 +21,7 @@ using TensorBoardLogger
 using Logging
 using BSON: @save, @load # save mode
 
-eval_mode = false
+eval_mode = true
 if !eval_mode
     logger = TBLogger("logs/landing3d/new_init_space", tb_increment)
 end
@@ -131,18 +131,18 @@ function VtolEnv(;
     )
     # specifiy sampling ranges
     ini_pos_space = Space(ClosedInterval{T}[ 
-        5.0..15.0, # radius
+        10.0..15.0, # radius
         0.0..deg2rad(360), # angle
-        5.0..10.0, # world z
+        5.0..7.0, # world z
     ])
     ini_rot_space = Space(ClosedInterval{T}[
-        -deg2rad(-1)..deg2rad(1) #TODO global delta z rotation around heading towards target_descend_rate
+        -deg2rad(-1)..deg2rad(1) #lobal delta z rotation around heading towards target
     ])
     ini_aoa_space = Space(ClosedInterval{T}[
-        deg2rad(5.0)..deg2rad(10.0) #TODO angle of attack in degrees
+        deg2rad(10.0)..deg2rad(20.0) #TODO angle of attack in degrees
     ])
-    ini_vel_lb = 3.0 # velocity range lower bound in m/s
-    ini_vel_ub = 8.0 # velocity range upper bound in m/s
+    ini_vel_lb = 7.0 # velocity range lower bound in m/s
+    ini_vel_ub = 20.0 # velocity range upper bound in m/s
     aoa = rand(ini_aoa_space)[1]
     ini_vel_space = Space(ClosedInterval{T}[
         cos(aoa) * ini_vel_lb..cos(aoa) * ini_vel_ub, # body x
@@ -340,7 +340,7 @@ function computeReward(env::VtolEnv{A,T}) where {A,T}
     env.stay_alive += stay_alive
     env.distance_reward += distance_reward
     env.inside_cylinder_reward += inside_cylinder_reward
-    env.rotation_reward += rotation_reward
+    env.rotation_reward += rotation_reward 
     env.slow_descend_reward += slow_descend_reward
     env.landed_reward += landed_reward
     env.action_rate_penalty -= action_rate_penalty
@@ -547,7 +547,7 @@ function saveModel(t, agent, env)
 end
 
 function loadModel()
-    f = joinpath("./src/experiments/exp06_landing3D/runs/candidate4.bson")
+    f = joinpath("./src/experiments/exp06_landing3D/runs/landing3D_44400000.bson")
     @load f model
     return model
 end
@@ -589,11 +589,11 @@ if eval_mode
     model = Flux.gpu(model)
     agent.policy.approximator = model;
     
-    for i = 1:6
+    for i = 1:1
         run(
             agent.policy, 
             VtolEnv(;name = "evalVTOL", visualization = true, realtime = true), 
-            StopAfterEpisode(1), 
+            StopAfterEpisode(10), 
             episode_test_reward_hook
         )
     end
