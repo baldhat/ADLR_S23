@@ -7,5 +7,6 @@ Manifest.toml
 logs/*
 .vscode/*
 src/examples/RL_models_landing_3d/*
+src/experiments/expo06_landing3D/runs/*
 Project.toml
 src/examples/RL_models/.DS_Store
