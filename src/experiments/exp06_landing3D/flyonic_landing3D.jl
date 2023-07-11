@@ -21,7 +21,7 @@ using TensorBoardLogger
 using Logging
 using BSON: @save, @load # save mode
 
-eval_mode = true
+eval_mode = false # set to true for evaluation mode
 if !eval_mode
     logger = TBLogger("logs/landing3d/new_init_space", tb_increment)
 end
@@ -266,18 +266,18 @@ function computeReward(env::VtolEnv{A,T}) where {A,T}
     # reward for being close to target, which is reduced, once a certain return
     # threshold is reached. Thisway, in early training, the drone learns to reach
     # the target quickly, but then does not oversaturate the reward.
-    distance_reward = weighting_fun(l2_dist, APPROACH_RADIUS) * 0.3
+    distance_reward = weighting_fun(l2_dist, APPROACH_RADIUS) * 0.5
     
     # penalty for high action rates
     action_rate_penalty = norm(env.action - env.last_action) * 1e-2
     env.last_action = env.action # probably there is a better place for this
     
     # penalty for high rotation rates
-    rotation_rate_penalty = l2_rot_vel * 3e-3
+    rotation_rate_penalty = l2_rot_vel * 1e-2
     
     # model of the landing procedure
     cylinder_radius = 0.5
-    cylinder_height = 3.0
+    cylinder_height = 1.0
     angle_radius = pi/2 # allowed deviation from target angle (= 0.0)
     target_descend_rate = -0.3 # target descend rate
     descend_rate_radius = 0.2 # allowed deviation from target descend rate
@@ -319,19 +319,19 @@ function computeReward(env::VtolEnv{A,T}) where {A,T}
     if 0.0 < delta_height < cylinder_height && delta_radius < cylinder_radius
         # reward being correctly oriented towards target
         delta_angle = rotation_angle(RotMatrix{3}(delta_rot))
-        # rotation_reward = masking_fun(delta_angle, angle_radius) * 1
+        rotation_reward = masking_fun(delta_angle, angle_radius) * 1
         # reward having the right descend rate
         delta_descend_rate = env.state[15] - target_descend_rate
         slow_descend_reward = masking_fun(delta_descend_rate, descend_rate_radius) * 10.0
         # reward being close to the ground
         elevation = env.state[3]
-        landed_reward = masking_fun(elevation, elevation_radius) * 5.0
+        landed_reward = masking_fun(elevation, elevation_radius) * 5.0        
         # detect if landed
         if (0.0 < delta_height < cylinder_height && delta_radius < cylinder_radius) &&
             (abs(delta_angle) < angle_radius) &&
-            (abs(delta_descend_rate) < descend_rate_radius) &&
+            (abs(delta_descend_rate) < descend_rate_radius) && 
             (elevation < elevation_radius)
-            landed_reward += 100.0
+            landed_reward += 10000.0
             env.done = true
         end
     end
@@ -470,7 +470,7 @@ function _step!(env::VtolEnv, next_action)
     
     if eval_mode
         push!(plotting_position_errors, norm(env.state[1:3]))	
-        push!(plotting_rotation_errors, norm(delta_rot))
+        push!(plotting_rotation_errors, norm(rotation_angle(RotMatrix{3}(delta_rot))))
         push!(plotting_actions, next_action)
         push!(plotting_return, env.Return)
     end
@@ -551,7 +551,7 @@ end
 
 function loadModel()
     # f = joinpath("./src/experiments/exp06_landing3D/runs/landing3D_59800000.bson")
-    f = joinpath("./src/experiments/exp06_landing3D/runs/landing3D_14200000.bson")
+    f = joinpath("./src/experiments/exp06_landing3D/08_quick_descend.bson")
     @load f model
     return model
 end
