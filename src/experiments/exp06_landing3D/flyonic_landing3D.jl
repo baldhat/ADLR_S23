@@ -69,6 +69,7 @@ mutable struct VtolEnv{A,T,ACT,R<:AbstractRNG} <: AbstractEnv # Parametric Const
 
     # logging of (sub-) rewards
     action_rate_penalty::T
+    action_penalty::T
     rotation_rate_penalty::T
     stay_alive::T
     distance_reward::T
@@ -207,9 +208,10 @@ function VtolEnv(;
         target_rot, # target rotation
 
         zeros(T, 4), # last action
-        0.9, # gamma for exponential smoothing
+        0.95, # gamma for exponential smoothing
 
         0.0, # penalty for action rates
+        0.0, # penalty for action magnitudes
         0.0, # penalty for rotationi velocity
         0.0, # reward part for stay_alive
         0.0, # penalty part for distance
@@ -268,12 +270,13 @@ function computeReward(env::VtolEnv{A,T}) where {A,T}
     # the target quickly, but then does not oversaturate the reward.
     distance_reward = weighting_fun(l2_dist, APPROACH_RADIUS) * 0.5
     
-    # penalty for high action rates
-    action_rate_penalty = norm(env.action - env.last_action) * 1e-2
+    # penalty for high action rates and actions
+    action_rate_penalty = norm(env.action - env.last_action) * 3e-2
+    action_penalty = norm(env.action) * 1e-2
     env.last_action = env.action # probably there is a better place for this
     
     # penalty for high rotation rates
-    rotation_rate_penalty = l2_rot_vel * 1e-2
+    rotation_rate_penalty = l2_rot_vel * 5e-2
     
     # model of the landing procedure
     cylinder_radius = 0.5
@@ -325,13 +328,13 @@ function computeReward(env::VtolEnv{A,T}) where {A,T}
         slow_descend_reward = masking_fun(delta_descend_rate, descend_rate_radius) * 10.0
         # reward being close to the ground
         elevation = env.state[3]
-        landed_reward = masking_fun(elevation, elevation_radius) * 5.0        
+        landed_reward = masking_fun(elevation, elevation_radius) * 2.0        
         # detect if landed
         if (0.0 < delta_height < cylinder_height && delta_radius < cylinder_radius) &&
             (abs(delta_angle) < angle_radius) &&
             (abs(delta_descend_rate) < descend_rate_radius) && 
             (elevation < elevation_radius)
-            landed_reward += 10000.0
+            landed_reward += 500.0
             env.done = true
         end
     end
@@ -344,9 +347,10 @@ function computeReward(env::VtolEnv{A,T}) where {A,T}
     env.slow_descend_reward += slow_descend_reward
     env.landed_reward += landed_reward
     env.action_rate_penalty -= action_rate_penalty
+    env.action_penalty -= action_penalty
     env.rotation_rate_penalty -= rotation_rate_penalty
 
-    reward = stay_alive + distance_reward + inside_cylinder_reward + rotation_reward + slow_descend_reward + landed_reward - action_rate_penalty - rotation_rate_penalty
+    reward = stay_alive + distance_reward + inside_cylinder_reward + rotation_reward + slow_descend_reward + landed_reward - action_rate_penalty - action_penalty - rotation_rate_penalty
     env.Return += reward
     
     return reward
@@ -390,6 +394,7 @@ function RLBase.reset!(env::VtolEnv{A,T}) where {A,T}
     env.slow_descend_reward = 0.0
     env.landed_reward = 0.0
     env.action_rate_penalty = 0.0
+    env.action_penalty = 0.0
     env.rotation_rate_penalty = 0.0
     env.Return = 0.0
     
@@ -486,7 +491,7 @@ end;
 
 seed = 123  
 rng = StableRNG(seed)
-N_ENV = 12
+N_ENV = 16
 UPDATE_FREQ = 512
 
     
@@ -551,7 +556,7 @@ end
 
 function loadModel()
     # f = joinpath("./src/experiments/exp06_landing3D/runs/landing3D_59800000.bson")
-    f = joinpath("./src/experiments/exp06_landing3D/08_quick_descend.bson")
+    f = joinpath("./src/experiments/exp06_landing3D/10_small_rotation_rate.bson")
     @load f model
     return model
 end
@@ -626,6 +631,7 @@ else
             DoEveryNStep(n=4_096) do  t, agent, env
                 Base.with_logger(logger) do
                     @info "reward" action_rate_penalty = mean([sub_env.action_rate_penalty for sub_env in env])
+                    @info "reward" action_penalty = mean([sub_env.action_penalty for sub_env in env])
                     @info "reward" rotation_rate_penalty = mean([sub_env.rotation_rate_penalty for sub_env in env])
                     @info "reward" stay_alive = mean([sub_env.stay_alive for sub_env in env])
                     @info "reward" distance_reward = mean([sub_env.distance_reward for sub_env in env])
