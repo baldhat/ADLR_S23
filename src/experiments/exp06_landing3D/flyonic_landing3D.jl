@@ -21,7 +21,7 @@ using TensorBoardLogger
 using Logging
 using BSON: @save, @load # save mode
 
-eval_mode = false # set to true for evaluation mode
+eval_mode = true # set to true for evaluation mode
 if !eval_mode
     logger = TBLogger("logs/landing3d/new_init_space", tb_increment)
 end
@@ -67,6 +67,12 @@ mutable struct VtolEnv{A,T,ACT,R<:AbstractRNG} <: AbstractEnv # Parametric Const
     last_action::Vector{T} # for exponential discount factor
     gamma::T # exponential discount factor
 
+    max_w::T
+    wind_q::T
+    wind_r::T
+    wind_s::T
+    wind_z::T
+
     # logging of (sub-) rewards
     action_rate_penalty::T
     action_penalty::T
@@ -80,6 +86,16 @@ mutable struct VtolEnv{A,T,ACT,R<:AbstractRNG} <: AbstractEnv # Parametric Const
     Return::T
 end
 
+
+function random_unit_vector()
+    direction = rand(Uniform(-1.0, 1.0), 3)
+    unit = direction/norm(direction)
+    while abs(unit[3]) > 0.3
+        direction = rand(Uniform(-1.0, 1.0), 3)
+        unit = direction/norm(direction)
+    end
+    return unit 
+end
 
 # define a keyword-based constructor for the type declared in the mutable struct typedef. 
 # It could also be done with the macro Base.@kwdef.
@@ -192,8 +208,8 @@ function VtolEnv(;
         zeros(T, 3), # v_B
         Matrix(RotX(pi)), # Float64... so T needs to be Float64
         zeros(T, 3), # ω_B
-        zeros(T, 3), # wind_W
-        # rand(Uniform(0.0, 3.0), 3), # wind_W
+        # zeros(T, 3), # wind_W
+        random_unit_vector(), # wind_W
         T(0.01), # Δt  
 
         ini_pos_space, # position space to be sampled
@@ -209,6 +225,12 @@ function VtolEnv(;
 
         zeros(T, 4), # last action
         0.95, # gamma for exponential smoothing
+
+        5.0,
+        rand(Uniform(-10, 10)),
+        rand(Uniform(-10, 10)),
+        rand(Uniform(-10, 10)),
+        rand(Uniform(-10, 10)),
 
         0.0, # penalty for action rates
         0.0, # penalty for action magnitudes
@@ -334,7 +356,7 @@ function computeReward(env::VtolEnv{A,T}) where {A,T}
             (abs(delta_angle) < angle_radius) &&
             (abs(delta_descend_rate) < descend_rate_radius) && 
             (elevation < elevation_radius)
-            landed_reward += 500.0
+            landed_reward += 100.0
             env.done = true
         end
     end
@@ -383,8 +405,14 @@ function RLBase.reset!(env::VtolEnv{A,T}) where {A,T}
     env.R_W = Matrix(Rotations.UnitQuaternion(RotZ(ini_rot)*RotY(-aoa)*RotX(pi)))
     # no angular velocity, no wind
     env.ω_B = [0.0; 0.0; 0.0];
-    env.wind_W = [0.0; 0.0; 0.0];
+    env.wind_W = random_unit_vector();
     # env.wind_W = rand(Uniform(0.0, 3.0), 3);
+
+    env.max_w = 5.0;
+    env.wind_q = rand(Uniform(-10, 10));
+    env.wind_r = rand(Uniform(-10, 10));
+    env.wind_s = rand(Uniform(-10, 10));
+    env.wind_z = rand(Uniform(-10, 10));
     
     # reset tracking variables for rewards
     env.stay_alive = 0.0
@@ -441,10 +469,22 @@ function (env::VtolEnv)(a)
 end
 
 
+function gusty_wind(env::VtolEnv, t)
+    return 0.5*env.max_w + (0.5*env.max_w)/5 * (
+        sin((3/2)*(t - env.wind_z) + 3/2) + 
+        sin((1/7)*(t - 3*env.wind_q) + 1/7) + 
+        sin((5/13)*(t - env.wind_r) + 5/13) +
+        sin((17/13)*(t - env.wind_s) + 17/13) +
+        sin((113/54)*(t - env.wind_z) + 113/54)
+    )
+end;
+
 function _step!(env::VtolEnv, next_action)
-        
+    
+    magnitude = gusty_wind(env, env.t)
+    wind = env.wind_W * magnitude
     # caluclate wind impact
-    v_in_wind_B = Flyonic.RigidBodies.vtol_add_wind(env.v_B, env.R_W, env.wind_W)
+    v_in_wind_B = Flyonic.RigidBodies.vtol_add_wind(env.v_B, env.R_W, wind)
     # caluclate aerodynamic forces
     torque_B, force_B = Flyonic.VtolModel.vtol_model(v_in_wind_B, next_action, Flyonic.eth_vtol_param);
     # integrate rigid body dynamics for Δt
@@ -455,6 +495,10 @@ function _step!(env::VtolEnv, next_action)
     if env.visualization
         Flyonic.Visualization.set_transform(env.name, env.x_W, QuatRotation(env.R_W));
         Flyonic.Visualization.set_actuators(env.name, next_action)
+        if env.t < 0.05
+            Flyonic.Visualization.set_arrow("wind", color_vec=[0.2, 0.2, 1.0, 0.3], radius=5.0)
+        end
+        Flyonic.Visualization.transform_arrow("wind", [0, 0, 3], wind)
     end
  
     env.t += env.Δt
@@ -475,7 +519,7 @@ function _step!(env::VtolEnv, next_action)
     
     if eval_mode
         push!(plotting_position_errors, norm(env.state[1:3]))	
-        push!(plotting_rotation_errors, norm(rotation_angle(RotMatrix{3}(delta_rot))))
+        push!(plotting_wind_steps, magnitude)
         push!(plotting_actions, next_action)
         push!(plotting_return, env.Return)
     end
@@ -556,7 +600,7 @@ end
 
 function loadModel()
     # f = joinpath("./src/experiments/exp06_landing3D/runs/landing3D_59800000.bson")
-    f = joinpath("./src/experiments/exp06_landing3D/10_small_rotation_rate.bson")
+    f = joinpath("./src/experiments/exp06_landing3D/11_gusty_wind.bson")
     @load f model
     return model
 end
@@ -568,16 +612,13 @@ function validate_policy(t, agent, env)
 end;
 
 episode_test_reward_hook = TotalRewardPerEpisode(;is_display_on_exit=false)
-# create a env only for reward test
-test_env = VtolEnv(;name = "testVTOL", visualization = true, realtime = true);
 
 agent.policy.approximator = loadModel()|>gpu;
 
 plotting_position_errors = []
-plotting_rotation_errors = []
-plotting_actions = []
+plotting_wind_steps = []
 plotting_return = []
-
+plotting_actions = []
 
 
 if eval_mode
@@ -600,7 +641,7 @@ if eval_mode
     model = Flux.gpu(model)
     agent.policy.approximator = model;
     
-    for i = 1:1
+    for i = 1:5
         run(
             agent.policy, 
             VtolEnv(;name = "evalVTOL", visualization = true, realtime = true), 
@@ -609,6 +650,8 @@ if eval_mode
         )
     end
 else
+    # create a env only for reward test
+    test_env = VtolEnv(;name = "testVTOL", visualization = true, realtime = true);
     function RLBase.prob(
         p::PPOPolicy{<:ActorCritic{<:GaussianNetwork},Normal},
         state::AbstractArray,
@@ -651,8 +694,8 @@ if eval_mode
     plotting_actions = [[x[i] for x in plotting_actions] for i in eachindex(plotting_actions[1])]
     x = range(0, length(plotting_position_errors), length(plotting_position_errors))
     p_position_errors = plot(x, plotting_position_errors, ylabel="[m]", title="Position Error")
-    p_rotation_errors = plot(x, plotting_rotation_errors.*180/pi, ylabel="[°]", title="Rotation Error")
+    wind = plot(x, plotting_wind_steps, ylabel="[m/s]", title="Wind velocity")
     p_actions = plot(x, plotting_actions, title="Actions", label=["thrust_L, thrust_R, flap_L, flap_R"], legend=true)
     p_rewards = plot(x, plotting_return, xlabel="time step", title="Return")
-    plot(p_position_errors, p_rotation_errors, p_actions, p_rewards, layout=(2,2), legend=false, size=(1200, 500))
+    plot(p_position_errors, wind, p_actions, p_rewards, layout=(2,2), legend=false, size=(1200, 500))
 end
