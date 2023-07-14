@@ -21,7 +21,7 @@ using TensorBoardLogger
 using Logging
 using BSON: @save, @load # save mode
 
-eval_mode = false # set to true for evaluation mode
+eval_mode = true # set to true for evaluation mode
 if !eval_mode
     logger = TBLogger("logs/landing3d/new_init_space", tb_increment)
 end
@@ -268,11 +268,11 @@ function computeReward(env::VtolEnv{A,T}) where {A,T}
     # reward for being close to target, which is reduced, once a certain return
     # threshold is reached. Thisway, in early training, the drone learns to reach
     # the target quickly, but then does not oversaturate the reward.
-    distance_reward = weighting_fun(l2_dist, APPROACH_RADIUS) * 0.5
+    distance_reward = weighting_fun(l2_dist, APPROACH_RADIUS) * 0.7
     
     # penalty for high action rates and actions
     action_rate_penalty = norm(env.action - env.last_action) * 3e-2
-    action_penalty = norm(env.action) * 1e-2
+    action_penalty = norm(env.action) * 5e-2
     env.last_action = env.action # probably there is a better place for this
     
     # penalty for high rotation rates
@@ -438,6 +438,15 @@ function (env::VtolEnv)(a)
                    env.action[4]] # ranges from -1 to 1 (network predicts in [-1, 1])
     
     _step!(env, next_action)
+
+    # a = env.gamma * env.last_action + (1 - env.gamma) * env.action
+    # # set the propeller trusts and the flaps
+    # next_action = [a[1] + 1, # ranges from 0 to 2 (network predicts in [-1, 1])
+    #                a[2] + 1, # ranges from 0 to 2 (network predicts in [-1, 1])
+    #                a[3], # ranges from -1 to 1 (network predicts in [-1, 1])
+    #                a[4]] # ranges from -1 to 1 (network predicts in [-1, 1])
+    # _step!(env, next_action)
+    # env.action = [a[1], a[2], a[3], a[4]]
 end
 
 
@@ -556,7 +565,7 @@ end
 
 function loadModel()
     # f = joinpath("./src/experiments/exp06_landing3D/runs/landing3D_59800000.bson")
-    f = joinpath("./src/experiments/exp06_landing3D/10_small_rotation_rate.bson")
+    f = joinpath("./src/experiments/exp06_landing3D/landing3D_89000000.bson")
     @load f model
     return model
 end
