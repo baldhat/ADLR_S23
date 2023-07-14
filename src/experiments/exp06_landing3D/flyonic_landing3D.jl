@@ -21,7 +21,7 @@ using TensorBoardLogger
 using Logging
 using BSON: @save, @load # save mode
 
-eval_mode = true # set to true to run in eval mode
+eval_mode = false # set to true to run in eval mode
 if !eval_mode
     logger = TBLogger("logs/landing3d/new_init_space", tb_increment)
 end
