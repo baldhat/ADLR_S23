@@ -67,6 +67,12 @@ mutable struct VtolEnv{A,T,ACT,R<:AbstractRNG} <: AbstractEnv # Parametric Const
     last_action::Vector{T} # for exponential discount factor
     gamma::T # exponential discount factor
 
+    max_w::T
+    wind_q::T
+    wind_r::T
+    wind_s::T
+    wind_z::T
+
     # logging of (sub-) rewards
     action_rate_penalty::T
     action_penalty::T
@@ -79,6 +85,14 @@ mutable struct VtolEnv{A,T,ACT,R<:AbstractRNG} <: AbstractEnv # Parametric Const
     landed_reward::T
     Return::T
 end
+
+function random_unit_vector()
+    phi_az = rand(Uniform(0.0, 2*pi))
+    phi_ele = rand(Uniform(-deg2rad(30), deg2rad(60)))
+    unit = [cos(phi_az)*cos(phi_ele), sin(phi_az)*cos(phi_ele), sin(phi_ele)]
+    return unit 
+end
+
 
 
 # define a keyword-based constructor for the type declared in the mutable struct typedef. 
@@ -192,8 +206,9 @@ function VtolEnv(;
         zeros(T, 3), # v_B
         Matrix(RotX(pi)), # Float64... so T needs to be Float64
         zeros(T, 3), # ω_B
-        zeros(T, 3), # wind_W
+        # zeros(T, 3), # wind_W
         # rand(Uniform(0.0, 3.0), 3), # wind_W
+        random_unit_vector(), # wind_W
         T(0.01), # Δt  
 
         ini_pos_space, # position space to be sampled
@@ -209,6 +224,12 @@ function VtolEnv(;
 
         zeros(T, 4), # last action
         0.95, # gamma for exponential smoothing
+        
+        5.0, # max wind speed
+        rand(Uniform(-10, 10)), # random parameter for wind sequence
+        rand(Uniform(-10, 10)), # random parameter for wind sequence
+        rand(Uniform(-10, 10)), # random parameter for wind sequence
+        rand(Uniform(-10, 10)), # random parameter for wind sequence
 
         0.0, # penalty for action rates
         0.0, # penalty for action magnitudes
@@ -384,6 +405,7 @@ function RLBase.reset!(env::VtolEnv{A,T}) where {A,T}
     # no angular velocity, no wind
     env.ω_B = [0.0; 0.0; 0.0];
     env.wind_W = [0.0; 0.0; 0.0];
+    env.wind_W = random_unit_vector();
     # env.wind_W = rand(Uniform(0.0, 3.0), 3);
     
     # reset tracking variables for rewards
@@ -449,11 +471,24 @@ function (env::VtolEnv)(a)
     # env.action = [a[1], a[2], a[3], a[4]]
 end
 
+function gusty_wind(env::VtolEnv, t)
+    return 0.5*env.max_w + (0.5*env.max_w)/5 * (
+        sin((3/2)*(t - env.wind_z) + 3/2) + 
+        sin((1/7)*(t - 3*env.wind_q) + 1/7) + 
+        sin((5/13)*(t - env.wind_r) + 5/13) +
+        sin((17/13)*(t - env.wind_s) + 17/13) +
+        sin((113/54)*(t - env.wind_z) + 113/54)
+    )
+end;
+
 
 function _step!(env::VtolEnv, next_action)
         
+    magnitude = gusty_wind(env, env.t)
+    wind = env.wind_W * magnitude
+
     # caluclate wind impact
-    v_in_wind_B = Flyonic.RigidBodies.vtol_add_wind(env.v_B, env.R_W, env.wind_W)
+    v_in_wind_B = Flyonic.RigidBodies.vtol_add_wind(env.v_B, env.R_W, wind)
     # caluclate aerodynamic forces
     torque_B, force_B = Flyonic.VtolModel.vtol_model(v_in_wind_B, next_action, Flyonic.eth_vtol_param);
     # integrate rigid body dynamics for Δt
@@ -570,7 +605,7 @@ end
 
 function loadModel()
     # f = joinpath("./src/experiments/exp06_landing3D/runs/landing3D_59800000.bson")
-    f = joinpath("./src/experiments/exp06_landing3D/landing3D_89000000.bson")
+    f = joinpath("./src/experiments/exp06_landing3D/12_small_actions.bson")
     @load f model
     return model
 end
