@@ -21,7 +21,7 @@ using TensorBoardLogger
 using Logging
 using BSON: @save, @load # save mode
 
-eval_mode = true # set to true for evaluation mode
+eval_mode = true # set to true to run in eval mode
 if !eval_mode
     logger = TBLogger("logs/landing3d/new_init_space", tb_increment)
 end
@@ -464,6 +464,10 @@ function _step!(env::VtolEnv, next_action)
     if env.visualization
         Flyonic.Visualization.set_transform(env.name, env.x_W, QuatRotation(env.R_W));
         Flyonic.Visualization.set_actuators(env.name, next_action)
+        if env.t < 0.05
+            Flyonic.Visualization.set_arrow("wind", color_vec=[0.2, 0.2, 1.0, 0.3], radius=5.0)
+        end
+        Flyonic.Visualization.transform_arrow("wind", [0, 0, 3], wind)
     end
  
     env.t += env.Δt
@@ -485,6 +489,7 @@ function _step!(env::VtolEnv, next_action)
     if eval_mode
         push!(plotting_position_errors, norm(env.state[1:3]))	
         push!(plotting_rotation_errors, norm(rotation_angle(RotMatrix{3}(delta_rot))))
+        push!(plotting_wind_steps, magnitude)
         push!(plotting_actions, next_action)
         push!(plotting_return, env.Return)
     end
@@ -577,16 +582,13 @@ function validate_policy(t, agent, env)
 end;
 
 episode_test_reward_hook = TotalRewardPerEpisode(;is_display_on_exit=false)
-# create a env only for reward test
-test_env = VtolEnv(;name = "testVTOL", visualization = true, realtime = true);
 
 agent.policy.approximator = loadModel()|>gpu;
 
 plotting_position_errors = []
-plotting_rotation_errors = []
-plotting_actions = []
+plotting_wind_steps = []
 plotting_return = []
-
+plotting_actions = []
 
 
 if eval_mode
@@ -609,7 +611,7 @@ if eval_mode
     model = Flux.gpu(model)
     agent.policy.approximator = model;
     
-    for i = 1:1
+    for i = 1:5
         run(
             agent.policy, 
             VtolEnv(;name = "evalVTOL", visualization = true, realtime = true), 
@@ -618,6 +620,8 @@ if eval_mode
         )
     end
 else
+    # create a env only for reward test
+    test_env = VtolEnv(;name = "testVTOL", visualization = true, realtime = true);
     function RLBase.prob(
         p::PPOPolicy{<:ActorCritic{<:GaussianNetwork},Normal},
         state::AbstractArray,
@@ -661,7 +665,8 @@ if eval_mode
     x = range(0, length(plotting_position_errors), length(plotting_position_errors))
     p_position_errors = plot(x, plotting_position_errors, ylabel="[m]", title="Position Error")
     p_rotation_errors = plot(x, plotting_rotation_errors.*180/pi, ylabel="[°]", title="Rotation Error")
+    wind = plot(x, plotting_wind_steps, ylabel="[m/s]", title="Wind velocity")
     p_actions = plot(x, plotting_actions, title="Actions", label=["thrust_L, thrust_R, flap_L, flap_R"], legend=true)
     p_rewards = plot(x, plotting_return, xlabel="time step", title="Return")
-    plot(p_position_errors, p_rotation_errors, p_actions, p_rewards, layout=(2,2), legend=false, size=(1200, 500))
+    plot(p_position_errors, wind, p_actions, p_rewards, layout=(2,2), legend=false, size=(1200, 500))
 end
