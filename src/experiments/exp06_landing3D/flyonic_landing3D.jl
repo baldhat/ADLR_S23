@@ -21,7 +21,7 @@ using TensorBoardLogger
 using Logging
 using BSON: @save, @load # save mode
 
-eval_mode = false # set to true to run in eval mode
+eval_mode = true # set to true to run in eval mode
 if !eval_mode
     logger = TBLogger("logs/landing3d/new_init_space", tb_increment)
 end
@@ -67,7 +67,9 @@ mutable struct VtolEnv{A,T,ACT,R<:AbstractRNG} <: AbstractEnv # Parametric Const
     last_action::Vector{T} # for exponential discount factor
     gamma::T # exponential discount factor
 
-    max_w::T
+    # wind
+    wind_mag_space::T
+    wind_mag::T
     wind_q::T
     wind_r::T
     wind_s::T
@@ -172,6 +174,9 @@ function VtolEnv(;
     target_rot_space = Space(ClosedInterval{T}[
         -0.001..0.001 # rotation around global z
     ])
+    wind_mag_space = Space(ClosedInterval{T}[
+        0.0..6.0, # wind x
+    ])
     
     # sample spaces to generate random initial conditions
     target_pos = rand(target_pos_space)
@@ -181,6 +186,7 @@ function VtolEnv(;
     y = ini_pos[1] * sin(ini_pos[2])
     z = ini_pos[3]
     ini_pos = [x; y; z]
+    wind_mag = rand(wind_mag_space)[1]
     
     if visualization
         Flyonic.Visualization.create_VTOL(name, actuators = true, color_vec=[1.0; 1.0; 0.6; 1.0]);
@@ -225,7 +231,8 @@ function VtolEnv(;
         zeros(T, 4), # last action
         0.95, # gamma for exponential smoothing
         
-        5.0, # max wind speed
+        wind_mag_space, # wind space to be sampled
+        wind_mag, # max wind speed
         rand(Uniform(-10, 10)), # random parameter for wind sequence
         rand(Uniform(-10, 10)), # random parameter for wind sequence
         rand(Uniform(-10, 10)), # random parameter for wind sequence
@@ -289,11 +296,11 @@ function computeReward(env::VtolEnv{A,T}) where {A,T}
     # reward for being close to target, which is reduced, once a certain return
     # threshold is reached. Thisway, in early training, the drone learns to reach
     # the target quickly, but then does not oversaturate the reward.
-    distance_reward = weighting_fun(l2_dist, APPROACH_RADIUS) * 0.7
+    distance_reward = weighting_fun(l2_dist, APPROACH_RADIUS) *  2.0
     
     # penalty for high action rates and actions
     action_rate_penalty = norm(env.action - env.last_action) * 3e-2
-    action_penalty = norm(env.action) * 5e-2
+    action_penalty = norm(env.action) * 1e-2
     env.last_action = env.action # probably there is a better place for this
     
     # penalty for high rotation rates
@@ -341,7 +348,7 @@ function computeReward(env::VtolEnv{A,T}) where {A,T}
 
     # REWARDS IN PARALLEL
     if 0.0 < delta_height < cylinder_height && delta_radius < cylinder_radius
-        # reward being correctly oriented towards target
+        # reward being upright at landing
         delta_angle = rotation_angle(RotMatrix{3}(delta_rot))
         rotation_reward = masking_fun(delta_angle, angle_radius) * 1
         # reward having the right descend rate
@@ -364,7 +371,7 @@ function computeReward(env::VtolEnv{A,T}) where {A,T}
     env.stay_alive += stay_alive
     env.distance_reward += distance_reward
     env.inside_cylinder_reward += inside_cylinder_reward
-    # env.rotation_reward += rotation_reward 
+    env.rotation_reward += rotation_reward 
     env.slow_descend_reward += slow_descend_reward
     env.landed_reward += landed_reward
     env.action_rate_penalty -= action_rate_penalty
@@ -406,7 +413,7 @@ function RLBase.reset!(env::VtolEnv{A,T}) where {A,T}
     env.ω_B = [0.0; 0.0; 0.0];
     env.wind_W = [0.0; 0.0; 0.0];
     env.wind_W = random_unit_vector();
-    # env.wind_W = rand(Uniform(0.0, 3.0), 3);
+    env.wind_mag = rand(env.wind_mag_space)[1]
     
     # reset tracking variables for rewards
     env.stay_alive = 0.0
@@ -472,7 +479,7 @@ function (env::VtolEnv)(a)
 end
 
 function gusty_wind(env::VtolEnv, t)
-    return 0.5*env.max_w + (0.5*env.max_w)/5 * (
+    return 0.5*env.wind_mag + (0.5*env.wind_mag)/5 * (
         sin((3/2)*(t - env.wind_z) + 3/2) + 
         sin((1/7)*(t - 3*env.wind_q) + 1/7) + 
         sin((5/13)*(t - env.wind_r) + 5/13) +
@@ -502,7 +509,7 @@ function _step!(env::VtolEnv, next_action)
         if env.t < 0.05
             Flyonic.Visualization.set_arrow("wind", color_vec=[0.2, 0.2, 1.0, 0.3], radius=5.0)
         end
-        Flyonic.Visualization.transform_arrow("wind", [0, 0, 3], wind)
+        Flyonic.Visualization.transform_arrow("wind", [0, 0, 3], -wind)
     end
  
     env.t += env.Δt
@@ -605,7 +612,7 @@ end
 
 function loadModel()
     # f = joinpath("./src/experiments/exp06_landing3D/runs/landing3D_59800000.bson")
-    f = joinpath("./src/experiments/exp06_landing3D/12_small_actions.bson")
+    f = joinpath("./src/experiments/exp06_landing3D/13_wind_small_rotations.bson")
     @load f model
     return model
 end
@@ -621,6 +628,7 @@ episode_test_reward_hook = TotalRewardPerEpisode(;is_display_on_exit=false)
 agent.policy.approximator = loadModel()|>gpu;
 
 plotting_position_errors = []
+plotting_rotation_errors = []
 plotting_wind_steps = []
 plotting_return = []
 plotting_actions = []
@@ -646,7 +654,7 @@ if eval_mode
     model = Flux.gpu(model)
     agent.policy.approximator = model;
     
-    for i = 1:5
+    for i = 1:1
         run(
             agent.policy, 
             VtolEnv(;name = "evalVTOL", visualization = true, realtime = true), 
@@ -703,5 +711,5 @@ if eval_mode
     wind = plot(x, plotting_wind_steps, ylabel="[m/s]", title="Wind velocity")
     p_actions = plot(x, plotting_actions, title="Actions", label=["thrust_L, thrust_R, flap_L, flap_R"], legend=true)
     p_rewards = plot(x, plotting_return, xlabel="time step", title="Return")
-    plot(p_position_errors, wind, p_actions, p_rewards, layout=(2,2), legend=false, size=(1200, 500))
+    plot(p_position_errors, p_rotation_errors, wind, p_actions, p_rewards, layout=(3,2), legend=false, size=(2000, 1200))
 end
