@@ -68,7 +68,7 @@ mutable struct VtolEnv{A,T,ACT,R<:AbstractRNG} <: AbstractEnv # Parametric Const
     gamma::T # exponential discount factor
 
     # wind
-    wind_mag_space::T
+    wind_mag_space::Space{Vector{ClosedInterval{T}}}
     wind_mag::T
     wind_q::T
     wind_r::T
@@ -309,7 +309,7 @@ function computeReward(env::VtolEnv{A,T}) where {A,T}
     # model of the landing procedure
     cylinder_radius = 0.5
     cylinder_height = 1.0
-    angle_radius = pi/2 # allowed deviation from target angle (= 0.0)
+    angle_radius = deg2rad(45) # allowed deviation from target angle (= 0.0)
     target_descend_rate = -0.3 # target descend rate
     descend_rate_radius = 0.2 # allowed deviation from target descend rate
     elevation_radius = 0.1 # once being this close to the ground, the drone is considered having landed
@@ -348,22 +348,25 @@ function computeReward(env::VtolEnv{A,T}) where {A,T}
 
     # REWARDS IN PARALLEL
     if 0.0 < delta_height < cylinder_height && delta_radius < cylinder_radius
-        # reward being upright at landing
-        delta_angle = rotation_angle(RotMatrix{3}(delta_rot))
-        rotation_reward = masking_fun(delta_angle, angle_radius) * 1
         # reward having the right descend rate
         delta_descend_rate = env.state[15] - target_descend_rate
         slow_descend_reward = masking_fun(delta_descend_rate, descend_rate_radius) * 10.0
         # reward being close to the ground
         elevation = env.state[3]
         landed_reward = masking_fun(elevation, elevation_radius) * 2.0        
+        # reward being upright at landing
+        delta_angle = acos(dot(delta_rot[:, 1], [1.0, 0.0, 0.0]))
         # detect if landed
         if (0.0 < delta_height < cylinder_height && delta_radius < cylinder_radius) &&
-            (abs(delta_angle) < angle_radius) &&
-            (abs(delta_descend_rate) < descend_rate_radius) && 
-            (elevation < elevation_radius)
-            landed_reward += 500.0
-            env.done = true
+           (abs(delta_angle) < angle_radius) &&
+           (abs(delta_descend_rate) < descend_rate_radius)
+            if (elevation < 10 * elevation_radius)
+                rotation_reward = masking_fun(delta_angle, angle_radius) * 10.0
+            end
+            if (elevation < elevation_radius)
+                landed_reward += 500.0
+                env.done = true
+            end
         end
     end
 
@@ -529,8 +532,9 @@ function _step!(env::VtolEnv, next_action)
     env.state[16:19] = env.last_action
     
     if eval_mode
+        delta_angle = acosd(dot(delta_rot[:, 1], [1.0, 0.0, 0.0]))
         push!(plotting_position_errors, norm(env.state[1:3]))	
-        push!(plotting_rotation_errors, norm(rotation_angle(RotMatrix{3}(delta_rot))))
+        push!(plotting_rotation_errors, delta_angle)
         push!(plotting_wind_steps, magnitude)
         push!(plotting_actions, next_action)
         push!(plotting_return, env.Return)
@@ -611,8 +615,8 @@ function saveModel(t, agent, env)
 end
 
 function loadModel()
-    # f = joinpath("./src/experiments/exp06_landing3D/runs/landing3D_59800000.bson")
-    f = joinpath("./src/experiments/exp06_landing3D/13_wind_small_rotations.bson")
+    f = joinpath("./src/experiments/exp06_landing3D/runs/landing3D_25500000.bson")
+    # f = joinpath("./src/experiments/exp06_landing3D/13_wind_small_rotations.bson")
     @load f model
     return model
 end
@@ -664,7 +668,7 @@ if eval_mode
     end
 else
     # create a env only for reward test
-    test_env = VtolEnv(;name = "testVTOL", visualization = true, realtime = true);
+    test_env = VtolEnv(;name = "testVTOL", visualization = false, realtime = false);
     function RLBase.prob(
         p::PPOPolicy{<:ActorCritic{<:GaussianNetwork},Normal},
         state::AbstractArray,
@@ -707,9 +711,9 @@ if eval_mode
     plotting_actions = [[x[i] for x in plotting_actions] for i in eachindex(plotting_actions[1])]
     x = range(0, length(plotting_position_errors), length(plotting_position_errors))
     p_position_errors = plot(x, plotting_position_errors, ylabel="[m]", title="Position Error")
-    p_rotation_errors = plot(x, plotting_rotation_errors.*180/pi, ylabel="[°]", title="Rotation Error")
+    p_rotation_errors = plot(x, plotting_rotation_errors, ylabel="[°]", title="Rotation Error")
     wind = plot(x, plotting_wind_steps, ylabel="[m/s]", title="Wind velocity")
     p_actions = plot(x, plotting_actions, title="Actions", label=["thrust_L, thrust_R, flap_L, flap_R"], legend=true)
     p_rewards = plot(x, plotting_return, xlabel="time step", title="Return")
-    plot(p_position_errors, p_rotation_errors, wind, p_actions, p_rewards, layout=(3,2), legend=false, size=(2000, 1200))
+    plot(p_position_errors, p_rotation_errors, wind, p_actions, p_rewards, layout=(3,2), legend=false, size=(1000, 600))
 end
