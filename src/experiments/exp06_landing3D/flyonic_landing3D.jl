@@ -21,7 +21,7 @@ using TensorBoardLogger
 using Logging
 using BSON: @save, @load # save mode
 
-eval_mode = true # set to true to run in eval mode
+eval_mode = false  # set to true to run in eval mode
 if !eval_mode
     logger = TBLogger("logs/landing3d/new_init_space", tb_increment)
 end
@@ -140,10 +140,13 @@ function VtolEnv(;
             typemin(T)..typemax(T), # 13: velocity along world x
             typemin(T)..typemax(T), # 14: velocity along world y
             typemin(T)..typemax(T), # 15: velocity along world z
-            typemin(T)..typemax(T), # 16: previous left thrust output
-            typemin(T)..typemax(T), # 17: previous right thrust output
-            typemin(T)..typemax(T), # 18: previous left flaps output
-            typemin(T)..typemax(T), # 19: previous right flaps output
+            typemin(T)..typemax(T), # 16: acceleration along body x
+            typemin(T)..typemax(T), # 17: acceleration along body y
+            typemin(T)..typemax(T), # 18: acceleration along body z
+            typemin(T)..typemax(T), # 19: previous left thrust output
+            typemin(T)..typemax(T), # 20: previous right thrust output
+            typemin(T)..typemax(T), # 21: previous left flaps output
+            typemin(T)..typemax(T), # 22: previous right flaps output
             ]
     )
     # specifiy sampling ranges
@@ -198,7 +201,7 @@ function VtolEnv(;
     environment = VtolEnv(
         action_space,
         state_space,
-        zeros(T, 19), # current state, needs to be extended.
+        zeros(T, 22), # current state, needs to be extended.
         rand(action_space), # current action
         false, # episode done ?
         0.0, # time
@@ -300,7 +303,7 @@ function computeReward(env::VtolEnv{A,T}) where {A,T}
     
     # penalty for high action rates and actions
     action_rate_penalty = norm(env.action - env.last_action) * 3e-2
-    action_penalty = norm(env.action) * 1e-2
+    action_penalty = norm(env.action) * 5e-2
     env.last_action = env.action # probably there is a better place for this
     
     # penalty for high rotation rates
@@ -437,12 +440,14 @@ function RLBase.reset!(env::VtolEnv{A,T}) where {A,T}
     # set initial VTOL state
     delta_rot = transpose(env.R_W) * env.target_rot
     v_W = env.R_W * env.v_B
+    a_B = [0.0; 0.0; 0.0];
     env.state = [
         env.x_W - env.target_pos;
         delta_rot[:,1];
         delta_rot[:,2];
         env.ω_B;
         v_W;
+        a_B;
         env.last_action;
     ]
     env.t = 0.0
@@ -495,14 +500,15 @@ end;
 function _step!(env::VtolEnv, next_action)
         
     magnitude = gusty_wind(env, env.t)
-    wind = env.wind_W * magnitude
+    random_rot = Matrix(RotZ(rand(Uniform(-deg2rad(20), deg2rad(20)))))
+    wind = random_rot * env.wind_W * magnitude
 
     # caluclate wind impact
     v_in_wind_B = Flyonic.RigidBodies.vtol_add_wind(env.v_B, env.R_W, wind)
     # caluclate aerodynamic forces
     torque_B, force_B = Flyonic.VtolModel.vtol_model(v_in_wind_B, next_action, Flyonic.eth_vtol_param);
     # integrate rigid body dynamics for Δt
-    env.x_W, env.v_B, _, env.R_W, env.ω_B, _, env.t = Flyonic.RigidBodies.rigid_body_simple(torque_B, force_B, env.x_W, env.v_B, env.R_W, env.ω_B, env.t, env.Δt, Flyonic.eth_vtol_param)
+    env.x_W, env.v_B, a_B, env.R_W, env.ω_B, _, env.t = Flyonic.RigidBodies.rigid_body_simple(torque_B, force_B, env.x_W, env.v_B, env.R_W, env.ω_B, env.t, env.Δt, Flyonic.eth_vtol_param)
     
 
     # Visualize the new state 
@@ -529,7 +535,8 @@ function _step!(env::VtolEnv, next_action)
     env.state[7:9] = delta_rot[:, 2]
     env.state[10:12] = env.ω_B
     env.state[13:15] = v_W
-    env.state[16:19] = env.last_action
+    env.state[16:18] = a_B
+    env.state[19:22] = env.last_action
     
     if eval_mode
         delta_angle = acosd(dot(delta_rot[:, 1], [1.0, 0.0, 0.0]))
@@ -629,7 +636,7 @@ end;
 
 episode_test_reward_hook = TotalRewardPerEpisode(;is_display_on_exit=false)
 
-agent.policy.approximator = loadModel()|>gpu;
+# agent.policy.approximator = loadModel()|>gpu;
 
 plotting_position_errors = []
 plotting_rotation_errors = []
