@@ -166,6 +166,9 @@ function VtolEnv(;
             typemin(T)..typemax(T), # 13: velocity along world x
             typemin(T)..typemax(T), # 14: velocity along world y
             typemin(T)..typemax(T), # 15: velocity along world z
+            typemin(T)..typemax(T), # 16: acceleration along body x # ACC_STATE
+            typemin(T)..typemax(T), # 17: acceleration along body y # ACC_STATE
+            typemin(T)..typemax(T), # 18: acceleration along body z # ACC_STATE
             typemin(T)..typemax(T), # 19: previous left thrust output
             typemin(T)..typemax(T), # 20: previous right thrust output
             typemin(T)..typemax(T), # 21: previous left flaps output
@@ -224,7 +227,8 @@ function VtolEnv(;
     environment = VtolEnv(
         action_space,
         state_space,
-        zeros(T, 19), # current state, needs to be extended.
+        zeros(T, 22), # current state, needs to be extended.# ACC_STATE
+        # zeros(T, 19), # current state, needs to be extended. # NON_ACC_STATE
         rand(action_space), # current action
         false, # episode done ?
         0.0, # time
@@ -602,7 +606,9 @@ function _step!(env::VtolEnv, next_action)
     env.state[7:9] = delta_rot[:, 2]
     env.state[10:12] = env.ω_B
     env.state[13:15] = v_W
-    env.state[16:19] = env.last_action
+    env.state[16:18] = a_B # ACC_STATE
+    env.state[19:22] = env.last_action # ACC_STATE
+    # env.state[16:19] = env.last_action # NON_ACC_STATE
     
     if eval_mode
         delta_angle = acosd(dot(delta_rot[:, 1], [1.0, 0.0, 0.0]))
@@ -696,9 +702,7 @@ function saveModel(t, agent, env)
     println("parameters at step $t saved to $f")
 end
 
-function loadModel(f = joinpath("./src/experiments/exp06_landing3D/runs_without_accel/landing3D_100000000.bson"))
-    # f = joinpath("./src/experiments/exp06_landing3D/runs_with_accel/landing3D_93300000.bson")
-    f = 
+function loadModel(f = joinpath("./src/experiments/exp06_landing3D/runs_with_accel/landing3D_91100000.bson"))
     @load f model
     return model
 end
@@ -736,11 +740,14 @@ if eval_mode
         end
     end
 
-    model = loadModel()
-    model = Flux.gpu(model)
-    agent.policy.approximator = model;
     
-    for i = 1:1
+    dir = "./src/experiments/exp06_landing3D/runs_with_accel/"
+    for chckpt in readdir(dir)[1:10:end]
+        global model
+        model = loadModel(string(dir, chckpt))
+        model = Flux.gpu(model)
+        agent.policy.approximator = model;
+
         viz_env = VtolEnv(;name = "evalVTOL", visualization = false, realtime = false)
         viz_env.target_pos_space = Space(ClosedInterval{Float64}[
             -0.001..0.0, # target x
@@ -753,6 +760,27 @@ if eval_mode
             StopAfterEpisode(1000), 
             episode_test_reward_hook
         )
+        
+        global performance_log_df
+        global df_after
+        global df_before
+        # split dataframe into two parts that have been logged before and after running the experiment
+        df_after = performance_log_df[:, 1:13]
+        df_before = performance_log_df[:, 14:end]
+        # remove first entry of logs after running the experiment
+        # because this is this run has never been performed
+        df_after = df_after[2:end, :]
+        # delete the last row of logs before running the experiment
+        # because this is run has never been performed
+        df_before = df_before[1:end-1, :]
+        # merge the two dataframes
+        performance_log_df = hcat(df_after, df_before)
+        CSV.write(string(dir, replace(chckpt, ".bson" => ".csv")), performance_log_df)
+        
+        # delete all rows of the dataframe
+        performance_log_df = performance_log_df[1:1, :]
+        deleteat!(performance_log_df, 1)
+
     end
 else
     # create a env only for reward test
@@ -804,18 +832,4 @@ if eval_mode
     p_actions = plot(x, plotting_actions, title="Actions", label=["thrust_L, thrust_R, flap_L, flap_R"], legend=true)
     p_rewards = plot(x, plotting_return, xlabel="time step", title="Return")
     plot(p_position_errors, p_rotation_errors, wind, p_actions, p_rewards, layout=(3,2), legend=false, size=(1000, 600))
-
-    # split dataframe into two parts that have been logged before and after running the experiment
-    df_after = performance_log_df[:, 1:13]
-    df_before = performance_log_df[:, 14:end]
-    # remove first entry of logs after running the experiment
-    # because this is this run has never been performed
-    df_after = df_after[2:end, :]
-    # delete the last row of logs before running the experiment
-    # because this is run has never been performed
-    df_before = df_before[1:end-1, :]
-    # merge the two dataframes
-    performance_log_df = hcat(df_before, df_after)
-    CSV.write("./src/experiments/exp06_landing3D/runs_without_accel/performance_metrics.csv", 
-              performance_log_df)
 end
