@@ -25,8 +25,10 @@ using BSON: @save, @load # save mode
 
 eval_mode = true  # set to true to run in eval mode
 if !eval_mode
+    # setup tensorboard logger
     logger = TBLogger("logs/landing3d/new_init_space", tb_increment)
 else
+    # setup dataframe to log all results of all runs of an evaluation
     performance_log_df = DataFrame(
         position_error = Float64[],
         rotation_error = Float64[],
@@ -52,7 +54,7 @@ else
         wind_mag = Float64[],
         )
 end
-print("Starting in eval mode: $eval_mode")
+println("Starting in eval mode: $eval_mode")
 Flyonic.Visualization.create_visualization();
 
 mutable struct VtolEnv{A,T,ACT,R<:AbstractRNG} <: AbstractEnv # Parametric Constructor for a subtype of AbstractEnv
@@ -70,36 +72,36 @@ mutable struct VtolEnv{A,T,ACT,R<:AbstractRNG} <: AbstractEnv # Parametric Const
     realtime::Bool # For humans recognizable visualization
     
     # description of evtol and its simulation
-    x_W::Vector{T}
-    v_B::Vector{T}
-    R_W::Matrix{T}
-    ω_B::Vector{T}
-    wind_W::Vector{T}
-    Δt::T
+    x_W::Vector{T} # position vector in world coordinates
+    v_B::Vector{T} # velocity vector in body coordinates
+    R_W::Matrix{T} # rotation of craft wrt to world frame
+    ω_B::Vector{T} # rotational velocity in body frame
+    wind_W::Vector{T} # wind vector in world coordinates
+    Δt::T # time step
 
     # setup of landing procedure
-    ini_pos_space::Space{Vector{ClosedInterval{T}}}
-    ini_rot_space::Space{Vector{ClosedInterval{T}}}
-    ini_aoa_space::Space{Vector{ClosedInterval{T}}}
-    ini_vel_lb::T
-    ini_vel_ub::T
-    ini_vel_space::Space{Vector{ClosedInterval{T}}}
-    target_pos_space::Space{Vector{ClosedInterval{T}}}
-    target_rot_space::Space{Vector{ClosedInterval{T}}}
-    target_pos::Vector{T}
-    target_rot::Matrix{T}
+    ini_pos_space::Space{Vector{ClosedInterval{T}}} # space to sample initial position
+    ini_rot_space::Space{Vector{ClosedInterval{T}}} # space to sample initial rotation
+    ini_aoa_space::Space{Vector{ClosedInterval{T}}} # space to sample initial angle of attack
+    ini_vel_lb::T # lower bound for initial velocity
+    ini_vel_ub::T # upper bound for initial velocity
+    ini_vel_space::Space{Vector{ClosedInterval{T}}} # space to sample initial velocity
+    target_pos_space::Space{Vector{ClosedInterval{T}}} # space to sample target position
+    target_rot_space::Space{Vector{ClosedInterval{T}}} # space to sample target rotation
+    target_pos::Vector{T} # sampled initial target position
+    target_rot::Matrix{T} # sampled initial target rotation
 
     # action smoothing
     last_action::Vector{T} # for exponential discount factor
     gamma::T # exponential discount factor
 
     # wind
-    wind_mag_space::Space{Vector{ClosedInterval{T}}}
-    wind_mag::T
-    wind_q::T
-    wind_r::T
-    wind_s::T
-    wind_z::T
+    wind_mag_space::Space{Vector{ClosedInterval{T}}} # space to sample wind magnitude
+    wind_mag::T # sampled wind magnitude
+    wind_q::T # random parameter for wind sequence
+    wind_r::T # random parameter for wind sequence
+    wind_s::T # random parameter for wind sequence
+    wind_z::T # random parameter for wind sequence
 
     # logging of (sub-) rewards
     action_rate_penalty::T
@@ -114,6 +116,8 @@ mutable struct VtolEnv{A,T,ACT,R<:AbstractRNG} <: AbstractEnv # Parametric Const
     Return::T
 end
 
+# define a function to generate a random unit vector with a random azimuth
+# and a random elevation angle between -30° and 60°
 function random_unit_vector()
     phi_az = rand(Uniform(0.0, 2*pi))
     phi_ele = rand(Uniform(-deg2rad(30), deg2rad(60)))
@@ -122,12 +126,9 @@ function random_unit_vector()
 end
 
 
-
 # define a keyword-based constructor for the type declared in the mutable struct typedef. 
 # It could also be done with the macro Base.@kwdef.
 function VtolEnv(;
-     
-    #continuous = true,
     rng = Random.GLOBAL_RNG, # Random number generation
     name = "vtol",
     visualization = false,
@@ -136,15 +137,13 @@ function VtolEnv(;
     )
     
     T = Float64; # explicit type which is used e.g. in state. Cannot be altered due to the poor matrix defininon.
-
-    #action_space = Base.OneTo(21) # 21 discrete positions for the flaps
     
     action_space = Space(
         ClosedInterval{T}[
-            0.0..2.0, # thrust
-            0.0..2.0, # thrust
-            -1.0..1.0, # flaps
-            -1.0..1.0, # flaps
+            0.0..2.0, # left thrust
+            0.0..2.0, # right thrust
+            -1.0..1.0, # left flap position
+            -1.0..1.0, # right flap position
             ], 
     )
 
@@ -166,9 +165,9 @@ function VtolEnv(;
             typemin(T)..typemax(T), # 13: velocity along world x
             typemin(T)..typemax(T), # 14: velocity along world y
             typemin(T)..typemax(T), # 15: velocity along world z
-            typemin(T)..typemax(T), # 16: acceleration along body x # ACC_STATE
-            typemin(T)..typemax(T), # 17: acceleration along body y # ACC_STATE
-            typemin(T)..typemax(T), # 18: acceleration along body z # ACC_STATE
+            typemin(T)..typemax(T), # 16: acceleration along body x
+            typemin(T)..typemax(T), # 17: acceleration along body y
+            typemin(T)..typemax(T), # 18: acceleration along body z
             typemin(T)..typemax(T), # 19: previous left thrust output
             typemin(T)..typemax(T), # 20: previous right thrust output
             typemin(T)..typemax(T), # 21: previous left flaps output
@@ -182,10 +181,10 @@ function VtolEnv(;
         6.5..7.0, # world z
     ])
     ini_rot_space = Space(ClosedInterval{T}[
-        -deg2rad(-10)..deg2rad(10) #lobal delta z rotation around heading towards target
+        -deg2rad(-10)..deg2rad(10) #global delta z rotation around heading towards target
     ])
     ini_aoa_space = Space(ClosedInterval{T}[
-        deg2rad(10.0)..deg2rad(20.0) #TODO angle of attack in degrees
+        deg2rad(10.0)..deg2rad(20.0) #angle of attack in degrees
     ])
     ini_vel_lb = 5.0 # velocity range lower bound in m/s
     ini_vel_ub = 8.0 # velocity range upper bound in m/s
@@ -745,7 +744,8 @@ if eval_mode
     agent.policy.approximator = model;
 
     for i = 1:1
-        viz_env = VtolEnv(;name = "evalVTOL", visualization = true, realtime = true)
+        viz_env = VtolEnv(;name = "evalVTOL", visualization = false, realtime = false)
+        # update target for better visual correspondence between tail of drone and ground
         viz_env.target_pos_space = Space(ClosedInterval{Float64}[
             -0.001..0.0, # target x
             -0.001..0.0, # target y
@@ -754,7 +754,7 @@ if eval_mode
         run(
             agent.policy, 
             viz_env, 
-            StopAfterEpisode(50), 
+            StopAfterEpisode(10_000), 
             episode_test_reward_hook
         )
 
@@ -814,17 +814,17 @@ if eval_mode
     p = plot(p_position_errors, p_rotation_errors, wind, p_actions, p_rewards, layout=(3,2), size=(1500, 700), dpi=150)
     display(p)
 
-    # # split dataframe into two parts that have been logged before and after running the experiment
-    # df_after = performance_log_df[:, 1:13]
-    # df_before = performance_log_df[:, 14:end]
-    # # remove first entry of logs after running the experiment
-    # # because this is this run has never been performed
-    # df_after = df_after[2:end, :]
-    # # delete the last row of logs before running the experiment
-    # # because this is run has never been performed
-    # df_before = df_before[1:end-1, :]
-    # # merge the two dataframes
-    # performance_log_df = hcat(df_before, df_after)
-    # CSV.write("./src/experiments/exp06_landing3D/runs_without_accel/performance_metrics.csv", 
-    #           performance_log_df)
+    # split dataframe into two parts that have been logged before and after running the experiment
+    df_after = performance_log_df[:, 1:13]
+    df_before = performance_log_df[:, 14:end]
+    # remove first entry of logs after running the experiment
+    # because this is this run has never been performed
+    df_after = df_after[2:end, :]
+    # delete the last row of logs before running the experiment
+    # because this is run has never been performed
+    df_before = df_before[1:end-1, :]
+    # merge the two dataframes
+    performance_log_df = hcat(df_before, df_after)
+    CSV.write("./src/experiments/exp06_landing3D/performance_metrics.csv", 
+              performance_log_df)
 end

@@ -93,7 +93,7 @@ p7 = bar(["low\nw/o", "low\nw/", "high\nw/o", "high\nw/"], [Return_wo_lowwind_me
          ylabel = "Mean Return", legend = false)
 
 # Failures
-rot_thr = 30.
+rot_thr = 35.
 pos_thr = 1.
 # outliers_wo = sum(df_without_acc.rotation_error .> rot_thr) / nrow(df_without_acc) * 100
 # outliers_wo_lowwind = sum(df_without_acc_lowwind.rotation_error .> rot_thr) / nrow(df_without_acc_lowwind) * 100
