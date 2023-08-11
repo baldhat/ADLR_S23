@@ -87,9 +87,7 @@ mutable struct VtolEnv{A,T,ACT,R<:AbstractRNG} <: AbstractEnv # Parametric Const
     ini_vel_ub::T # upper bound for initial velocity
     ini_vel_space::Space{Vector{ClosedInterval{T}}} # space to sample initial velocity
     target_pos_space::Space{Vector{ClosedInterval{T}}} # space to sample target position
-    target_rot_space::Space{Vector{ClosedInterval{T}}} # space to sample target rotation
     target_pos::Vector{T} # sampled initial target position
-    target_rot::Matrix{T} # sampled initial target rotation
 
     # action smoothing
     last_action::Vector{T} # for exponential discount factor
@@ -199,16 +197,12 @@ function VtolEnv(;
         -0.001..0.0, # target y
         0.499..0.5, # target z
     ])
-    target_rot_space = Space(ClosedInterval{T}[
-        -0.001..0.001 # rotation around global z
-    ])
     wind_mag_space = Space(ClosedInterval{T}[
         0.0..6.0, # wind x
     ])
     
     # sample spaces to generate random initial conditions
     target_pos = rand(target_pos_space)
-    target_rot = Matrix(RotZ(rand(target_rot_space)[1])*RotY(-pi/2))
     ini_pos = rand(ini_pos_space)
     x = ini_pos[1] * cos(ini_pos[2])
     y = ini_pos[1] * sin(ini_pos[2])
@@ -253,9 +247,7 @@ function VtolEnv(;
         ini_vel_lb, # initial velocity lower bound
         ini_vel_space, # velocity space to be sampled
         target_pos_space, # target position space to be sampled
-        target_rot_space, # target rotation space to be sampled
         target_pos, # target position
-        target_rot, # target rotation
 
         zeros(T, 4), # last action
         0.95, # gamma for exponential smoothing
@@ -504,10 +496,9 @@ function RLBase.reset!(env::VtolEnv{A,T}) where {A,T}
     
     env.last_action = zeros(T, 4)
     env.target_pos = rand(env.target_pos_space)
-    env.target_rot = Matrix(RotZ(rand(env.target_rot_space)[1])*RotY(-pi/2))
     
     # set initial VTOL state
-    delta_rot = transpose(env.R_W) * env.target_rot
+    delta_rot = transpose(env.R_W) * Matrix(RotY(-pi/2))
     v_W = env.R_W * env.v_B
     a_B = [0.0; 0.0; 0.0];
     env.state = [
@@ -598,7 +589,7 @@ function _step!(env::VtolEnv, next_action)
     end
     
     # State space
-    delta_rot = transpose(env.R_W) * env.target_rot
+    delta_rot = transpose(env.R_W) * Matrix(RotY(-pi/2))
     v_W = env.R_W * env.v_B
     env.state[1:3] = env.x_W - env.target_pos
     env.state[4:6] = delta_rot[:, 1]
