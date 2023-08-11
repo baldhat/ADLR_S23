@@ -13,14 +13,15 @@ df_with_acc = CSV.read("./src/experiments/exp06_landing3D/runs_with_accel/landin
 # df_without_acc = df_without_acc[df_without_acc.position_error .< 1, :]
 # df_with_acc = df_with_acc[df_with_acc.position_error .< 1, :]
 
-println("Outliers with acceleration: ", sum(df_with_acc.position_error .> 1))
-println("Outliers without acceleration: ", sum(df_without_acc.position_error .> 1))
+println("Failures with acceleration: ", sum(df_with_acc.position_error .> 1))
+println("Failures without acceleration: ", sum(df_without_acc.position_error .> 1))
 
-wind_thr = 4
-df_with_acc_lowwind = df_with_acc[df_with_acc.wind_mag .< wind_thr, :]
-df_without_acc_lowwind = df_without_acc[df_without_acc.wind_mag .< wind_thr, :]
-df_with_acc_highwind = df_with_acc[df_with_acc.wind_mag .>= wind_thr, :]
-df_without_acc_highwind = df_without_acc[df_without_acc.wind_mag .>= wind_thr, :]
+wind_thr_low = 3.0
+wind_thr_high = 3.0
+df_with_acc_lowwind = df_with_acc[df_with_acc.wind_mag .< wind_thr_low, :]
+df_without_acc_lowwind = df_without_acc[df_without_acc.wind_mag .< wind_thr_low, :]
+df_with_acc_highwind = df_with_acc[df_with_acc.wind_mag .>= wind_thr_high, :]
+df_without_acc_highwind = df_without_acc[df_without_acc.wind_mag .>= wind_thr_high, :]
 println("Otliers with acceleration (low wind): ", sum(df_with_acc_lowwind.position_error .> 1))
 println("Otliers without acceleration (low wind): ", sum(df_without_acc_lowwind.position_error .> 1))
 println("Otliers with acceleration (high wind): ", sum(df_with_acc_highwind.position_error .> 1))
@@ -47,7 +48,7 @@ p5 = bar(["low\nw/o", "low\nw/", "high\nw/o", "high\nw/"],
         #  yerr = [errpos_wo_lowwind_std, errpos_w_lowwind_std, errpos_wo_highwind_std, errpos_w_highwind_std],
          text=["", text(@sprintf("%.1f", (errpos_w_lowwind_mean/errpos_wo_lowwind_mean-1)*100)*" %", 6, :bottom),
                "", text(@sprintf("%.1f", (errpos_w_highwind_mean/errpos_wo_highwind_mean-1)*100)*" %", 6, :bottom)],
-         fill=["firebrick3", "coral", "seagreen", "darkseagreen1"], bar_width=0.9, alpha=0.7,
+         fill=["firebrick3", "seagreen", "coral", "darkseagreen1"], bar_width=0.9, alpha=0.7,
          ylabel = "Mean Error (m)", legend = false)
 
 
@@ -67,7 +68,7 @@ p6 = bar(["low\nw/o", "low\nw/", "high\nw/o", "high\nw/"], [errori_wo_lowwind_me
         #  yerr = [errori_wo_lowwind_std, errori_w_lowwind_std, errori_wo_highwind_std, errori_w_highwind_std],
          text=["", text(@sprintf("%.1f", (errori_w_lowwind_mean/errori_wo_lowwind_mean-1)*100)*" %", 6, :bottom),
                "", text(@sprintf("%.1f", (errori_w_highwind_mean/errori_wo_highwind_mean-1)*100)*" %", 6, :bottom)],
-         fill=["firebrick3", "coral", "seagreen", "darkseagreen1"], bar_width=0.9, alpha=0.7,
+         fill=["firebrick3", "seagreen", "coral", "darkseagreen1"], bar_width=0.9, alpha=0.7,
          ylabel = "Mean Error (°)", legend = false)
 
 
@@ -88,10 +89,10 @@ p7 = bar(["low\nw/o", "low\nw/", "high\nw/o", "high\nw/"], [Return_wo_lowwind_me
         #  yerr = [Return_wo_lowwind_std, Return_w_lowwind_std, Return_wo_highwind_std, Return_w_highwind_std],        
          text=["", text(@sprintf("+%.1f", (Return_w_lowwind_mean/Return_wo_lowwind_mean-1)*100)*" %", 6, :bottom),
                "", text(@sprintf("+%.1f", (Return_w_highwind_mean/Return_wo_highwind_mean-1)*100)*" %", 6, :bottom)],
-         fill=["firebrick3", "coral", "seagreen", "darkseagreen1"], bar_width=0.9, alpha=0.7,
+         fill=["firebrick3", "seagreen", "coral", "darkseagreen1"], bar_width=0.9, alpha=0.7,
          ylabel = "Mean Return", legend = false)
 
-# Outliers
+# Failures
 rot_thr = 35
 pos_thr = 1.
 # outliers_wo = sum(df_without_acc.rotation_error .> rot_thr) / nrow(df_without_acc) * 100
@@ -109,11 +110,11 @@ outliers_w_highwind = sum(df_with_acc_highwind.rotation_error .> rot_thr * df_wi
 p4 = bar(["Without\nAccel", "With\nAccel"], [outliers_wo, outliers_w],
          fill=["orangered", "green4"], bar_width=0.9, alpha=0.7,
          text=["", text(@sprintf("%.1f", (outliers_w/outliers_wo-1)*100)*" %", 10, :bottom)],
-         title = "Outliers", ylabel = "Outlier Rate (%)", legend = false)
+         title = "Failures", ylabel = "Failure Rate (%)", legend = false)
 p8 = bar(["low\nw/o", "low\nw/", "high\nw/o", "high\nw/"], [outliers_wo_lowwind, outliers_w_lowwind, outliers_wo_highwind, outliers_w_highwind],
          text=["", text(@sprintf("%.1f", (outliers_w_lowwind/outliers_wo_lowwind-1)*100)*" %", 6, :bottom),
              "", text(@sprintf("%.1f", (outliers_w_highwind/outliers_wo_highwind-1)*100)*" %", 6, :bottom)],
-         fill=["firebrick3", "coral", "seagreen", "darkseagreen1"], bar_width=0.9, alpha=0.7,
-         ylabel = "Outlier Rate (%)", legend = false)
+         fill=["firebrick3", "seagreen", "coral", "darkseagreen1"], bar_width=0.9, alpha=0.7,
+         ylabel = "Failure Rate (%)", legend = false)
 
 plot(p1, p2, p3, p4, p5, p6, p7, p8, layout = (2,4), size = (850, 600), dpi = 300)

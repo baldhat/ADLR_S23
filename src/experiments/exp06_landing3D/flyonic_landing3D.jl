@@ -166,17 +166,17 @@ function VtolEnv(;
             typemin(T)..typemax(T), # 13: velocity along world x
             typemin(T)..typemax(T), # 14: velocity along world y
             typemin(T)..typemax(T), # 15: velocity along world z
-            typemin(T)..typemax(T), # 19: previous left thrust output
-            typemin(T)..typemax(T), # 20: previous right thrust output
-            typemin(T)..typemax(T), # 21: previous left flaps output
-            typemin(T)..typemax(T), # 22: previous right flaps output
+            typemin(T)..typemax(T), # 16: previous left thrust output
+            typemin(T)..typemax(T), # 17: previous right thrust output
+            typemin(T)..typemax(T), # 18: previous left flaps output
+            typemin(T)..typemax(T), # 19: previous right flaps output
             ]
     )
     # specifiy sampling ranges
     ini_pos_space = Space(ClosedInterval{T}[ 
         8..15.0, # radius
         0.0..deg2rad(360), # angle
-        6.5..7.0, # world z
+        6.5..7.0, # world z10
     ])
     ini_rot_space = Space(ClosedInterval{T}[
         -deg2rad(-10)..deg2rad(10) #lobal delta z rotation around heading towards target
@@ -513,7 +513,7 @@ function RLBase.reset!(env::VtolEnv{A,T}) where {A,T}
         delta_rot[:,2];
         env.ω_B;
         v_W;
-        a_B;
+        # a_B;
         env.last_action;
     ]
     env.t = 0.0
@@ -696,9 +696,8 @@ function saveModel(t, agent, env)
     println("parameters at step $t saved to $f")
 end
 
-function loadModel(f = joinpath("./src/experiments/exp06_landing3D/runs_without_accel/landing3D_100000000.bson"))
+function loadModel(f = joinpath("./src/experiments/exp06_landing3D/08_quick_descend.bson"))
     # f = joinpath("./src/experiments/exp06_landing3D/runs_with_accel/landing3D_93300000.bson")
-    f = 
     @load f model
     return model
 end
@@ -750,7 +749,7 @@ if eval_mode
         run(
             agent.policy, 
             viz_env, 
-            StopAfterEpisode(1000), 
+            StopAfterEpisode(1), 
             episode_test_reward_hook
         )
     end
@@ -798,24 +797,27 @@ if eval_mode
     # transpose action logs
     plotting_actions = [[x[i] for x in plotting_actions] for i in eachindex(plotting_actions[1])]
     x = range(0, length(plotting_position_errors), length(plotting_position_errors))
-    p_position_errors = plot(x, plotting_position_errors, ylabel="[m]", title="Position Error")
-    p_rotation_errors = plot(x, plotting_rotation_errors, ylabel="[°]", title="Rotation Error")
-    wind = plot(x, plotting_wind_steps, ylabel="[m/s]", title="Wind velocity")
-    p_actions = plot(x, plotting_actions, title="Actions", label=["thrust_L, thrust_R, flap_L, flap_R"], legend=true)
-    p_rewards = plot(x, plotting_return, xlabel="time step", title="Return")
-    plot(p_position_errors, p_rotation_errors, wind, p_actions, p_rewards, layout=(3,2), legend=false, size=(1000, 600))
+    p_position_errors = plot(x, plotting_position_errors, ylabel="[m]", title="Position Error", legend=false)
+    p_rotation_errors = plot(x, plotting_rotation_errors, ylabel="[°]", title="Rotation Error", legend=false)
+    wind = plot(x, plotting_wind_steps, ylabel="[m/s]", title="Wind velocity", legend=false)
+    p_rewards = plot(x, plotting_return, xlabel="time step", title="Return", legend=false)
+    p_actions = plot(x, plotting_actions[1], title="Actions", label="thrust_L", legend=:bottomleft, markeralpha = 0.5,)
+    plot!(x, plotting_actions[2], label="thrust_R")
+    plot!(x, plotting_actions[3], label="flap_L")
+    plot!(x, plotting_actions[4], label="flap_R")
+    plot(p_position_errors, p_rotation_errors, wind, p_actions, p_rewards, layout=(3,2), size=(1500, 700), dpi=150)
 
-    # split dataframe into two parts that have been logged before and after running the experiment
-    df_after = performance_log_df[:, 1:13]
-    df_before = performance_log_df[:, 14:end]
-    # remove first entry of logs after running the experiment
-    # because this is this run has never been performed
-    df_after = df_after[2:end, :]
-    # delete the last row of logs before running the experiment
-    # because this is run has never been performed
-    df_before = df_before[1:end-1, :]
-    # merge the two dataframes
-    performance_log_df = hcat(df_before, df_after)
-    CSV.write("./src/experiments/exp06_landing3D/runs_without_accel/performance_metrics.csv", 
-              performance_log_df)
+    # # split dataframe into two parts that have been logged before and after running the experiment
+    # df_after = performance_log_df[:, 1:13]
+    # df_before = performance_log_df[:, 14:end]
+    # # remove first entry of logs after running the experiment
+    # # because this is this run has never been performed
+    # df_after = df_after[2:end, :]
+    # # delete the last row of logs before running the experiment
+    # # because this is run has never been performed
+    # df_before = df_before[1:end-1, :]
+    # # merge the two dataframes
+    # performance_log_df = hcat(df_after, df_before)
+    # CSV.write("./src/experiments/exp06_landing3D/runs_without_accel/performance_metrics.csv", 
+    #           performance_log_df)
 end

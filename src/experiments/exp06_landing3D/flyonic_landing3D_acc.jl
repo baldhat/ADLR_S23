@@ -188,7 +188,7 @@ function VtolEnv(;
         deg2rad(10.0)..deg2rad(20.0) #TODO angle of attack in degrees
     ])
     ini_vel_lb = 5.0 # velocity range lower bound in m/s
-    ini_vel_ub = 11.0 # velocity range upper bound in m/s
+    ini_vel_ub = 8.0 # velocity range upper bound in m/s
     aoa = rand(ini_aoa_space)[1]
     ini_vel_space = Space(ClosedInterval{T}[
         cos(aoa) * ini_vel_lb..cos(aoa) * ini_vel_ub, # body x
@@ -218,7 +218,7 @@ function VtolEnv(;
     wind_mag = rand(wind_mag_space)[1]
     
     if visualization
-        Flyonic.Visualization.create_VTOL(name, actuators = true, color_vec=[1.0; 1.0; 0.6; 1.0]);
+        Flyonic.Visualization.create_VTOL(name, actuators = true, color_vec=[0.4; 0.6; 1.0; 1.0]);
         Flyonic.Visualization.set_transform(name, ini_pos , QuatRotation(Rotations.UnitQuaternion(RotX(pi))));
         Flyonic.Visualization.set_actuators(name, [0.0; 0.0; 0.0; 0.0])
     end
@@ -623,7 +623,7 @@ function _step!(env::VtolEnv, next_action)
     if env.visualization
         env.done =
             env.x_W[3] < 0.45 || # crashed
-            env.t > 20 # stop after 20 seconds
+            env.t > 30 # stop after 20 seconds
     else 
         env.done = 
             env.state[3] < 0.45 || # crashed
@@ -702,7 +702,7 @@ function saveModel(t, agent, env)
     println("parameters at step $t saved to $f")
 end
 
-function loadModel(f = joinpath("./src/experiments/exp06_landing3D/runs_with_accel/landing3D_91100000.bson"))
+function loadModel(f = joinpath("./src/experiments/exp06_landing3D/17_final_with_acc.bson"))
     @load f model
     return model
 end
@@ -740,15 +740,12 @@ if eval_mode
         end
     end
 
-    
-    dir = "./src/experiments/exp06_landing3D/runs_with_accel/"
-    for chckpt in readdir(dir)[1:10:end]
-        global model
-        model = loadModel(string(dir, chckpt))
-        model = Flux.gpu(model)
-        agent.policy.approximator = model;
+    model = loadModel()
+    model = Flux.gpu(model)
+    agent.policy.approximator = model;
 
-        viz_env = VtolEnv(;name = "evalVTOL", visualization = false, realtime = false)
+    for i = 1:1
+        viz_env = VtolEnv(;name = "evalVTOL", visualization = true, realtime = true)
         viz_env.target_pos_space = Space(ClosedInterval{Float64}[
             -0.001..0.0, # target x
             -0.001..0.0, # target y
@@ -757,29 +754,9 @@ if eval_mode
         run(
             agent.policy, 
             viz_env, 
-            StopAfterEpisode(1000), 
+            StopAfterEpisode(50), 
             episode_test_reward_hook
         )
-        
-        global performance_log_df
-        global df_after
-        global df_before
-        # split dataframe into two parts that have been logged before and after running the experiment
-        df_after = performance_log_df[:, 1:13]
-        df_before = performance_log_df[:, 14:end]
-        # remove first entry of logs after running the experiment
-        # because this is this run has never been performed
-        df_after = df_after[2:end, :]
-        # delete the last row of logs before running the experiment
-        # because this is run has never been performed
-        df_before = df_before[1:end-1, :]
-        # merge the two dataframes
-        performance_log_df = hcat(df_after, df_before)
-        CSV.write(string(dir, replace(chckpt, ".bson" => ".csv")), performance_log_df)
-        
-        # delete all rows of the dataframe
-        performance_log_df = performance_log_df[1:1, :]
-        deleteat!(performance_log_df, 1)
 
     end
 else
@@ -826,10 +803,28 @@ if eval_mode
     # transpose action logs
     plotting_actions = [[x[i] for x in plotting_actions] for i in eachindex(plotting_actions[1])]
     x = range(0, length(plotting_position_errors), length(plotting_position_errors))
-    p_position_errors = plot(x, plotting_position_errors, ylabel="[m]", title="Position Error")
-    p_rotation_errors = plot(x, plotting_rotation_errors, ylabel="[°]", title="Rotation Error")
-    wind = plot(x, plotting_wind_steps, ylabel="[m/s]", title="Wind velocity")
-    p_actions = plot(x, plotting_actions, title="Actions", label=["thrust_L, thrust_R, flap_L, flap_R"], legend=true)
-    p_rewards = plot(x, plotting_return, xlabel="time step", title="Return")
-    plot(p_position_errors, p_rotation_errors, wind, p_actions, p_rewards, layout=(3,2), legend=false, size=(1000, 600))
+    p_position_errors = plot(x, plotting_position_errors, ylabel="[m]", title="Position Error", legend=false)
+    p_rotation_errors = plot(x, plotting_rotation_errors, ylabel="[°]", title="Rotation Error", legend=false)
+    wind = plot(x, plotting_wind_steps, ylabel="[m/s]", title="Wind velocity", legend=false)
+    p_rewards = plot(x, plotting_return, xlabel="time step", title="Return", legend=false)
+    p_actions = plot(x, plotting_actions[1], title="Actions", label="thrust_L", legend=:bottomleft, markeralpha = 0.5,)
+    plot!(x, plotting_actions[2], label="thrust_R")
+    plot!(x, plotting_actions[3], label="flap_L")
+    plot!(x, plotting_actions[4], label="flap_R")
+    p = plot(p_position_errors, p_rotation_errors, wind, p_actions, p_rewards, layout=(3,2), size=(1500, 700), dpi=150)
+    display(p)
+
+    # # split dataframe into two parts that have been logged before and after running the experiment
+    # df_after = performance_log_df[:, 1:13]
+    # df_before = performance_log_df[:, 14:end]
+    # # remove first entry of logs after running the experiment
+    # # because this is this run has never been performed
+    # df_after = df_after[2:end, :]
+    # # delete the last row of logs before running the experiment
+    # # because this is run has never been performed
+    # df_before = df_before[1:end-1, :]
+    # # merge the two dataframes
+    # performance_log_df = hcat(df_before, df_after)
+    # CSV.write("./src/experiments/exp06_landing3D/runs_without_accel/performance_metrics.csv", 
+    #           performance_log_df)
 end
