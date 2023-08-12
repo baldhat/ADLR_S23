@@ -180,7 +180,7 @@ function VtolEnv(;
         6.5..7.0, # world z
     ])
     ini_rot_space = Space(ClosedInterval{T}[
-        -deg2rad(-10)..deg2rad(10) #global delta z rotation around heading towards target
+        -deg2rad(-10)..deg2rad(10) # global delta z rotation around heading towards target
     ])
     ini_aoa_space = Space(ClosedInterval{T}[
         deg2rad(10.0)..deg2rad(20.0) #angle of attack in degrees
@@ -588,9 +588,8 @@ function _step!(env::VtolEnv, next_action)
     env.state[7:9] = delta_rot[:, 2]
     env.state[10:12] = env.ω_B
     env.state[13:15] = v_W
-    env.state[16:18] = a_B # ACC_STATE
-    env.state[19:22] = env.last_action # ACC_STATE
-    # env.state[16:19] = env.last_action # NON_ACC_STATE
+    env.state[16:18] = a_B
+    env.state[19:22] = env.last_action
     
     if eval_mode
         # log quantities for plotting
