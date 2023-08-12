@@ -172,6 +172,7 @@ function VtolEnv(;
             typemin(T)..typemax(T), # 22: previous right flaps output
             ]
     )
+
     # specifiy sampling ranges
     ini_pos_space = Space(ClosedInterval{T}[ 
         8..15.0, # radius
@@ -211,6 +212,7 @@ function VtolEnv(;
     wind_mag = rand(wind_mag_space)[1]
     
     if visualization
+        # create visualization object and reflect eVTOL state
         Flyonic.Visualization.create_VTOL(name, actuators = true, color_vec=[0.4; 0.6; 1.0; 1.0]);
         Flyonic.Visualization.set_transform(name, ini_pos , QuatRotation(Rotations.UnitQuaternion(RotX(pi))));
         Flyonic.Visualization.set_actuators(name, [0.0; 0.0; 0.0; 0.0])
@@ -218,10 +220,9 @@ function VtolEnv(;
 
 
     environment = VtolEnv(
-        action_space,
-        state_space,
-        zeros(T, 22), # current state, needs to be extended.# ACC_STATE
-        # zeros(T, 19), # current state, needs to be extended. # NON_ACC_STATE
+        action_space, # ranges for actions
+        state_space, # ranges for states
+        zeros(T, 22), # current state
         rand(action_space), # current action
         false, # episode done ?
         0.0, # time
@@ -235,8 +236,6 @@ function VtolEnv(;
         zeros(T, 3), # v_B
         Matrix(RotX(pi)), # Float64... so T needs to be Float64
         zeros(T, 3), # ω_B
-        # zeros(T, 3), # wind_W
-        # rand(Uniform(0.0, 3.0), 3), # wind_W
         random_unit_vector(), # wind_W
         T(0.01), # Δt  
 
@@ -271,9 +270,10 @@ function VtolEnv(;
         0.0 # Return
     )
     
-    # don't log here in reset function, because no results have been collected yet
     global  eval_mode
     if eval_mode
+        # don't log here in reset function, because no results have been collected yet
+        # thus use reset for initial setup but deactivate eval temporarily
         eval_mode = false
         RLBase.reset!(environment)
         eval_mode = true
@@ -296,7 +296,7 @@ RLBase.state(env::VtolEnv) = env.state
 function computeReward(env::VtolEnv{A,T}) where {A,T}
     # constants and functions for tuning
     APPROACH_RADIUS = 10 # radius where the drone should transition to hovering
-    L = 500 # weighting function is smoothed at r/l with a parabola
+    L = 500 # weighting function is smoothed at r/l
     weighting_fun_raw = (x, r) -> (1 - (abs(x / r)) ^ 0.4)
     # this weighting function smoothes the raw weighting function inside +-r/L
     # with a parabola to limit the maximum gradient
@@ -314,23 +314,21 @@ function computeReward(env::VtolEnv{A,T}) where {A,T}
     stay_alive = 0.05
 
     # extract movement metrics from state_space
-    l2_dist = norm(env.state[1:3])
-    # l2_vel = norm(env.state[13:15])
-    l2_rot_vel = norm(env.state[10:12])
+    l2_dist = norm(env.state[1:3]) # 3d distance to target
+    l2_rot_vel = norm(env.state[10:12]) # rotation velocity
+    # build matrix for relative rotation to target
     delta_rot = zeros(3,3)
     delta_rot[:, 1] = env.state[4:6] / norm(env.state[4:6]) # ensure unit length
     delta_rot[:, 2] = env.state[7:9] / norm(env.state[7:9]) # ensure unit length
-    delta_rot[:, 3] = cross(delta_rot[:, 1], delta_rot[:, 2])
+    delta_rot[:, 3] = cross(delta_rot[:, 1], delta_rot[:, 2]) # build right hand coordinate system
 
-    # reward for being close to target, which is reduced, once a certain return
-    # threshold is reached. Thisway, in early training, the drone learns to reach
-    # the target quickly, but then does not oversaturate the reward.
+    # reward for being close to target
     distance_reward = weighting_fun(l2_dist, APPROACH_RADIUS) *  5.0
     
     # penalty for high action rates and actions
     action_rate_penalty = norm(env.action - env.last_action) * 3e-2
     action_penalty = norm(env.action[1:2]) * 1e-1 + norm(env.action[3:4]) * 5e-3
-    env.last_action = env.action # probably there is a better place for this
+    env.last_action = env.action # update the last action to track action rate in next iter
     
     # penalty for high rotation rates
     rotation_rate_penalty = l2_rot_vel * 1e-1
@@ -350,10 +348,11 @@ function computeReward(env::VtolEnv{A,T}) where {A,T}
     
     # reward being inside landing cylifnder
     delta_height = env.state[3]
-    delta_radius = norm(env.state[1:2])
+    delta_radius = norm(env.state[1:2]) # distance in x-y plane
     if (0.0 < delta_height < cylinder_height) 
         inside_cylinder_reward = masking_fun(delta_radius, cylinder_radius) * 7.0
     end
+
     # # REWARDS IN SEQUENCE (empirically deprecated)
     # # reward being correctly oriented towards target
     # if 0.0 < delta_height < cylinder_height && delta_radius < cylinder_radius
@@ -383,13 +382,13 @@ function computeReward(env::VtolEnv{A,T}) where {A,T}
         # reward being close to the ground
         elevation = env.state[3]
         landed_reward = 0.0      
-        # reward being upright at landing
         delta_angle = acos(dot(delta_rot[:, 1], [1.0, 0.0, 0.0]))
         # detect if landed
         if (0.0 < delta_height < cylinder_height && delta_radius < cylinder_radius) &&
            (abs(delta_angle) < angle_radius) &&
            (abs(delta_descend_rate) < descend_rate_radius)
             landed_reward += masking_fun(elevation - elevation_radius, 3 * elevation_radius) ^ 2 * 15.0  
+            # give reward for being upright only very close to landing
             if (elevation < 10 * elevation_radius)
                 rotation_reward = masking_fun(delta_angle, angle_radius) * 10.0
             end
@@ -399,7 +398,7 @@ function computeReward(env::VtolEnv{A,T}) where {A,T}
         end
     end
 
-    
+    # track subrewards for logging in tensorboard
     env.stay_alive += stay_alive
     env.distance_reward += distance_reward
     env.inside_cylinder_reward += inside_cylinder_reward
@@ -410,9 +409,9 @@ function computeReward(env::VtolEnv{A,T}) where {A,T}
     env.action_penalty -= action_penalty
     env.rotation_rate_penalty -= rotation_rate_penalty
 
+    # sum up rewards, subtract penalties and return
     reward = stay_alive + distance_reward + inside_cylinder_reward + rotation_reward + slow_descend_reward + landed_reward - action_rate_penalty - action_penalty - rotation_rate_penalty
-    env.Return += reward
-    
+    env.Return += reward # track Return for logging in tensorboard
     return reward
 end
 
@@ -425,7 +424,7 @@ function RLBase.reset!(env::VtolEnv{A,T}) where {A,T}
         delta_rot = zeros(3,3)
         delta_rot[:, 1] = env.state[4:6] / norm(env.state[4:6]) # ensure unit length
         delta_rot[:, 2] = env.state[7:9] / norm(env.state[7:9]) # ensure unit length
-        delta_rot[:, 3] = cross(delta_rot[:, 1], delta_rot[:, 2])
+        delta_rot[:, 3] = cross(delta_rot[:, 1], delta_rot[:, 2]) # build right hand coordinate system
         # write performance log for metrics after episode end
         push!(performance_log_df.position_error, norm(env.state[1:3]))
         push!(performance_log_df.rotation_error, acosd(dot(delta_rot[:, 1], [1.0, 0.0, 0.0])))
@@ -448,7 +447,7 @@ function RLBase.reset!(env::VtolEnv{A,T}) where {A,T}
     y = ini_pos[1] * sin(ini_pos[2])
     z = ini_pos[3]
     env.x_W = [x; y; z]
-    
+    # reset sample space for ini vel, as it changes with the sampled angle of attack
     aoa = rand(env.ini_aoa_space)[1]
     env.ini_vel_space = Space(ClosedInterval{T}[
         cos(aoa) * env.ini_vel_lb..cos(aoa) * env.ini_vel_ub, # body x
@@ -468,8 +467,9 @@ function RLBase.reset!(env::VtolEnv{A,T}) where {A,T}
     env.wind_W = [0.0; 0.0; 0.0];
     env.wind_W = random_unit_vector();
     env.wind_mag = rand(env.wind_mag_space)[1]
+    env.target_pos = rand(env.target_pos_space)
     
-    # write performance log for metrics before episode end
+    # write performance log for metrics at episode start
     if eval_mode
         push!(performance_log_df.approach_radius, ini_pos[1])
         push!(performance_log_df.approach_angle, ini_pos[2])
@@ -494,8 +494,8 @@ function RLBase.reset!(env::VtolEnv{A,T}) where {A,T}
     env.rotation_rate_penalty = 0.0
     env.Return = 0.0
     
+    # reset tracking variable for action rate calculation
     env.last_action = zeros(T, 4)
-    env.target_pos = rand(env.target_pos_space)
     
     # set initial VTOL state
     delta_rot = transpose(env.R_W) * Matrix(RotY(-pi/2))
@@ -527,6 +527,7 @@ end;
 # So when a VtolEnv object is created, it has this method that can be called
 function (env::VtolEnv)(a)
     env.action = [a[1], a[2], a[3], a[4]]
+    # apply exponential smoothing
     env.action = env.gamma * env.last_action + (1 - env.gamma) * env.action
     # set the propeller trusts and the flaps
     next_action = [env.action[1] + 1, # ranges from 0 to 2 (network predicts in [-1, 1])
@@ -535,19 +536,11 @@ function (env::VtolEnv)(a)
                    env.action[4]] # ranges from -1 to 1 (network predicts in [-1, 1])
     
     _step!(env, next_action)
-
-    # a = env.gamma * env.last_action + (1 - env.gamma) * env.action
-    # # set the propeller trusts and the flaps
-    # next_action = [a[1] + 1, # ranges from 0 to 2 (network predicts in [-1, 1])
-    #                a[2] + 1, # ranges from 0 to 2 (network predicts in [-1, 1])
-    #                a[3], # ranges from -1 to 1 (network predicts in [-1, 1])
-    #                a[4]] # ranges from -1 to 1 (network predicts in [-1, 1])
-    # _step!(env, next_action)
-    # env.action = [a[1], a[2], a[3], a[4]]
 end
 
+# calculate current wind as linear combination of sine waves with random phase and frequency
 function gusty_wind(env::VtolEnv, t)
-    return 0.5*env.wind_mag + (0.5*env.wind_mag)/5 * (
+    return 0.5 * env.wind_mag + (0.5 * env.wind_mag)/5 * (
         sin((3/2)*(t - env.wind_z) + 3/2) + 
         sin((1/7)*(t - 3*env.wind_q) + 1/7) + 
         sin((5/13)*(t - env.wind_r) + 5/13) +
@@ -558,12 +551,11 @@ end;
 
 
 function _step!(env::VtolEnv, next_action)
-        
     magnitude = gusty_wind(env, env.t)
-    # oscillate wind +- 20 degrees
+    # oscillate wind +- 30 degrees
     alpha = deg2rad(30 * (gusty_wind(env, 8 * env.t) / env.wind_mag - 0.5) * 2)
     random_rot = Matrix(RotZ(alpha))
-    wind = random_rot * env.wind_W * magnitude
+    wind = random_rot * env.wind_W * magnitude # build final wind vector
 
     # caluclate wind impact
     v_in_wind_B = Flyonic.RigidBodies.vtol_add_wind(env.v_B, env.R_W, wind)
@@ -581,14 +573,14 @@ function _step!(env::VtolEnv, next_action)
         end
         Flyonic.Visualization.transform_arrow("wind", [0, 0, 3], -wind)
     end
- 
-    env.t += env.Δt
+    
+    env.t += env.Δt # increment time
 
     if env.realtime
         sleep(env.Δt) # TODO: just a dirty hack. this is of course slower than real time.
     end
     
-    # State space
+    # udpate state space with simulation results
     delta_rot = transpose(env.R_W) * Matrix(RotY(-pi/2))
     v_W = env.R_W * env.v_B
     env.state[1:3] = env.x_W - env.target_pos
@@ -601,6 +593,7 @@ function _step!(env::VtolEnv, next_action)
     # env.state[16:19] = env.last_action # NON_ACC_STATE
     
     if eval_mode
+        # log quantities for plotting
         delta_angle = acosd(dot(delta_rot[:, 1], [1.0, 0.0, 0.0]))
         push!(plotting_position_errors, norm(env.state[1:3]))	
         push!(plotting_rotation_errors, delta_angle)
@@ -611,9 +604,10 @@ function _step!(env::VtolEnv, next_action)
 
     # Termination criteria
     if env.visualization
+        # give a little longer for a landing attempt during evaluation
         env.done =
             env.x_W[3] < 0.45 || # crashed
-            env.t > 30 # stop after 20 seconds
+            env.t > 30 # stop after 30 seconds
     else 
         env.done = 
             env.state[3] < 0.45 || # crashed
@@ -621,12 +615,14 @@ function _step!(env::VtolEnv, next_action)
     end
     nothing
     if env.done && env.visualization && env.realtime
+        # just for visualization show landed craft for a while
         sleep(1.0)
     end
 
 end;
 
 
+# hyperparamters for training
 seed = 123  
 rng = StableRNG(seed)
 N_ENV = 16
@@ -685,28 +681,30 @@ agent = Agent( # A wrapper of an AbstractPolicy
 );
 
 # callback functions for training
+# save a checkpoint of the current model
 function saveModel(t, agent, env)
     model = cpu(agent.policy.approximator)   
     f = joinpath("./src/experiments/exp06_landing3D/runs/", "landing3D_$t.bson")
     @save f model
     println("parameters at step $t saved to $f")
 end
-
+# load a checkpoint to continue training or evaluate
 function loadModel(f = joinpath("./src/experiments/exp06_landing3D/17_final_with_acc.bson"))
     @load f model
     return model
 end
-
+# perform a validation run of a test environment using the current policy
 function validate_policy(t, agent, env)
     run(agent.policy, test_env, StopAfterEpisode(1), episode_test_reward_hook)
     # the result of the hook
     println("\nTest reward at step $t: $(episode_test_reward_hook.rewards[end])")
 end;
-
 episode_test_reward_hook = TotalRewardPerEpisode(;is_display_on_exit=false)
 
-# agent.policy.approximator = loadModel()|>gpu;
+# load checkpoint for continuing training
+# agent.policy.approximator = loadModel()|>gpu; 
 
+# reset tracking variable for plotting
 plotting_position_errors = []
 plotting_rotation_errors = []
 plotting_wind_steps = []
@@ -730,10 +728,12 @@ if eval_mode
         end
     end
 
+    # load checkpoint
     model = loadModel()
     model = Flux.gpu(model)
     agent.policy.approximator = model;
 
+    # let the evaluation environment run
     for i = 1:1
         viz_env = VtolEnv(;name = "evalVTOL", visualization = false, realtime = false)
         # update target for better visual correspondence between tail of drone and ground
@@ -745,7 +745,7 @@ if eval_mode
         run(
             agent.policy, 
             viz_env, 
-            StopAfterEpisode(10_000), 
+            StopAfterEpisode(1_000), 
             episode_test_reward_hook
         )
 
@@ -753,6 +753,7 @@ if eval_mode
 else
     # create a env only for reward test
     test_env = VtolEnv(;name = "testVTOL", visualization = false, realtime = false);
+    # override prob without eliminating sigma
     function RLBase.prob(
         p::PPOPolicy{<:ActorCritic{<:GaussianNetwork},Normal},
         state::AbstractArray,
@@ -765,6 +766,7 @@ else
             StructArray{Normal}((μ, exp.(logσ)))
         end
     end
+    # training loop
     run(
         agent,
         env,
@@ -773,6 +775,7 @@ else
             DoEveryNStep(saveModel, n=100_000), 
             DoEveryNStep(validate_policy, n=100_000),
             DoEveryNStep(n=4_096) do  t, agent, env
+                # log subrewards to tensorboard
                 Base.with_logger(logger) do
                     @info "reward" action_rate_penalty = mean([sub_env.action_rate_penalty for sub_env in env])
                     @info "reward" action_penalty = mean([sub_env.action_penalty for sub_env in env])
@@ -791,6 +794,7 @@ else
 end
 
 if eval_mode
+    # plot tracked variables after evaluation run
     # transpose action logs
     plotting_actions = [[x[i] for x in plotting_actions] for i in eachindex(plotting_actions[1])]
     x = range(0, length(plotting_position_errors), length(plotting_position_errors))
@@ -805,6 +809,7 @@ if eval_mode
     p = plot(p_position_errors, p_rotation_errors, wind, p_actions, p_rewards, layout=(3,2), size=(1500, 700), dpi=150)
     display(p)
 
+    # log evaluation results of episode ends to file
     # split dataframe into two parts that have been logged before and after running the experiment
     df_after = performance_log_df[:, 1:13]
     df_before = performance_log_df[:, 14:end]
